@@ -1,0 +1,26 @@
+target-version = "py312"
+line-length = 110
+extend-exclude = ["migrations", ".venv"]
+
+[lint]
+select = [
+    "E", "F", "W", "I", "B", "C4", "UP", "N", "DJ", "S", "RUF",
+]
+ignore = [
+    "S101",   # asserts allowed (tests)
+    "B008",   # function call in default arg — common in Django Ninja
+    "S105",   # hardcoded-password-string false positives for token type literals
+    "S106",   # same
+    "S311",   # non-crypto random ok for utility helpers
+    "N815",   # mixedCase fields needed for camelCase API schemas
+    "N818",   # Exception name suffix — Django/DRF convention is plain names
+    "RUF012", # Mutable defaults in Django Meta classes are standard
+    "DJ008",  # __str__ not required on every model
+    "DJ012",  # Django style guide for Meta ordering — not enforcing this
+    "UP046",  # PEP 695 generic syntax — works either way for now
+]
+
+[lint.per-file-ignores]
+"**/tests/**" = ["S", "DJ"]
+"**/migrations/*" = ["E501", "N806"]
+"config/settings/*" = ["F405", "F403", "S104"]
