@@ -2,14 +2,14 @@
 
 ## Current Status
 
-- Backend initialized: 2026-05-17
-- Last session: 2026-05-17
-- Current state: Module 1 done, **Module 2-lite** done (models + read endpoints + seed). Full Module 2 (CRUD + Excel import) still pending.
+- Module 1: complete
+- **Module 2 (People & Structure): complete** — full CRUD for students, teachers, classes, sections, subjects, teacher assignments; bulk Excel import; Excel export; photo upload via Django default_storage (local in dev, R2 swap is a config flag).
+- Module 3+ pending.
 
 ## Modules
 
 - [x] Module 1: Foundation (auth, school, academic year, tenant infra)
-- [~] Module 2: People & Structure — **lite**: models + read-only list/detail endpoints + seed. CRUD + Excel bulk import not yet built.
+- [x] Module 2: People & Structure
 - [ ] Module 3: Attendance
 - [ ] Module 4: Tests & Scores
 - [ ] Module 5: WhatsApp Integration
@@ -19,95 +19,103 @@
 - [ ] Module 9: Parent Web View
 - [ ] Module 10: Polish
 
-## API Endpoints Built (19 endpoints)
-
-All emit/accept camelCase at the wire boundary.
+## API Endpoints (41 total)
 
 ### Auth (`/api/v1/auth/`)
-- `POST /signup`, `POST /login`, `POST /refresh`, `POST /forgot-password`, `POST /verify-otp`, `POST /reset-password`
-- `GET /me` (auth)
+- POST signup, login, refresh, forgot-password, verify-otp, reset-password
+- GET me (auth)
 
-### Schools (`/api/v1/schools/`) — auth, admin for writes
-- `GET /current`, `PATCH /current`
-- `GET /academic-years`, `POST /academic-years`, `PATCH /academic-years/{id}`
+### Schools (`/api/v1/schools/`) — admin for writes
+- GET/PATCH /current
+- GET/POST /academic-years
+- PATCH /academic-years/{id}
 
-### People (`/api/v1/`) — auth, read-only
-- `GET /students` (paginated; filters: `classId`, `sectionId`, `status`, `q`, `page`, `pageSize`)
-- `GET /students/{id}`
-- `GET /teachers` (paginated; filters: `status`)
-- `GET /teachers/{id}`
+### People (`/api/v1/`) — admin for writes
+- GET /students (paginated, filterable by classId/sectionId/status/q)
+- POST /students — admin only
+- POST /students/bulk-import — admin only, multipart .xlsx + dryRun flag
+- GET /students/export — admin only, .xlsx download
+- GET /students/{id}, PATCH, DELETE (soft → withdrawn)
+- POST /students/{id}/transfer — preserves enrollment history
+- POST /students/{id}/photo — multipart image
+- GET /teachers (paginated)
+- POST /teachers — admin only
+- GET /teachers/{id}, PATCH, DELETE (soft → inactive)
+- POST /teachers/{id}/photo
 
-### Academics (`/api/v1/`) — auth, read-only
-- `GET /classes` (with nested sections + student counts, filters: `academicYearId`)
-- `GET /sections/{id}`
-- `GET /subjects`
+### Academics (`/api/v1/`) — admin for writes
+- GET /classes (nested sections + student counts)
+- POST /classes, PATCH /classes/{id}, DELETE /classes/{id} (blocked if sections exist)
+- GET /sections/{id}, POST /sections, PATCH, DELETE (blocked if active enrollments)
+- GET /subjects, POST /subjects, PATCH /subjects/{id}, DELETE /subjects/{id}
+- POST /teacher-assignments, DELETE /teacher-assignments/{id}
 
 OpenAPI captured at [docs/openapi.json](openapi.json).
 
-## Demo seed
+## Tests
 
-Run `python manage.py seed_demo` (idempotent — won't double-seed; `--reset` to wipe and recreate).
+64 passing. Module 2 adds:
 
-**The seeded school**: "Vidya Bharati High School" (Vijayawada, AP State Board).
+- **CRUD happy paths** for students, teachers, classes, sections, subjects, teacher assignments.
+- **Tenant isolation on writes**: admin A cannot create-into / patch / delete / transfer / assign / etc. any resource in school B. Every cross-tenant attempt returns 404 (no existence leak).
+- **Permission tests**: teacher role cannot use admin-only endpoints (create student, create teacher, create class, bulk import).
+- **Bulk import edge cases**: dry-run validation, all-or-nothing commit (one bad row rejects the batch), duplicate admission numbers (within file + against DB), missing required columns, invalid gender, unknown class/section, blank rows skipped, teacher role forbidden.
+- **Transfer flow**: preserves history (old enrollment marked `transferred`, new one `active`), rejects no-op transfer to same section, partial unique constraint enforces one active enrollment per (student, year).
 
-| | Count |
-|---|---|
-| Students | ~660 (across all classes) |
-| Teachers | 18 |
-| Subjects | 9 (Telugu, Hindi, English, Math, Science variants, Social, CS) |
-| Classes | 10 (Class 1–10) |
-| Sections | 24 (2–3 sections per class) |
-| Class teachers | Every section has one |
-| Subject assignments | Each (section, subject) has a teacher |
+## Photo storage
 
-**Admin login**: `+919876543210` / `demo1234`
+- All uploads go through Django's `default_storage` (`apps/core/storage.py`).
+- Dev: `FileSystemStorage` → writes to `MEDIA_ROOT/uploads/<school_id>/<kind>/<owner_id>-<ts>-<nonce>.<ext>`; served by Django in DEBUG mode.
+- Prod: set `USE_R2=True` + credentials → same calls hit Cloudflare R2.
+- Pillow resizes to max 1024×1024 and re-encodes (JPEG q=85). Max 5 MB. Allowed: jpeg/png/webp.
+- **TODO**: when first prod school onboards, flip `USE_R2=True` and verify CDN URLs. No code change required.
 
-Realistic Telugu/Indian names, AP cities for addresses, parent contacts with WhatsApp flags, age-appropriate DOBs by class level. Deterministic (uses `--seed=42`).
+## Demo seed (unchanged from Module 1)
+
+`docker compose up` → postgres + redis + Django auto-migrate + auto-seed.
+
+- **School**: Vidya Bharati High School (Vijayawada, AP State Board)
+- 10 classes, 24 sections, 18 teachers, 9 subjects, ~660 students
+- **Admin login**: `+919876543210` / `demo1234`
+
+`python manage.py seed_demo --reset` to wipe and recreate.
 
 ## Frontend wiring
 
-- `src/lib/api/` — fetch client (auto bearer + one-shot 401 refresh), auth, students, classes API modules.
-- `src/routes/admin/students/` — list and detail pages wired to real API via TanStack Query (pagination, class/section/status filters, search).
-- `.env.development` defaults to `VITE_USE_MOCK_API=false`. Set `=true` in `.env.local` to fall back to MSW (auth-only handlers; Module 2+ endpoints not mocked).
+Real-API pages:
+- `/login`, `/signup`
+- `/admin/students` — list with pagination, class/section/status filters, search; row actions: View / Edit / Transfer / Withdraw via dropdown
+- `/admin/students/:id` — detail (Profile tab live; Attendance/Marks/Fees/Comms placeholders for their modules)
+- `/admin/teachers` — list, add, edit, mark inactive
+- `/admin/teachers/:id` — detail
 
-## How to run the full demo
+Frontend components added:
+- `components/students/StudentFormDialog.tsx` — create/edit
+- `components/students/BulkImportDialog.tsx` — two-phase (validate → commit) with per-row error display
+- `components/teachers/TeacherFormDialog.tsx` — create/edit
 
-```bash
-# 1. Bring up everything in one shot
-cd ~/git/skooly
-docker compose up                     # postgres + redis + Django (auto-migrate + auto-seed)
+Pages still using mock data: attendance, fees, tests, classes detail, announcements, analytics, report cards. These migrate as their backend modules land.
 
-# 2. Start frontend (separate terminal)
-cd ~/git/skooly-stride
-bun install                            # first time only
-bun run dev                            # opens http://localhost:8080
+## Open questions / known gaps
 
-# 3. Sign in
-# phone: +919876543210
-# password: demo1234
-```
+- **Classes admin CRUD UI**: not yet built — list page already shows live data from `GET /classes`, but creating/editing classes/sections from the UI hasn't been wired. Backend endpoints exist (`POST/PATCH/DELETE /classes` and `/sections`); building the UI is ~half a day. Deferred until needed.
+- **Photo upload UI**: backend endpoint exists; no UI button yet. Add to student/teacher detail pages when needed.
+- **Student detail edit**: the detail page has an Edit button that opens an inline form, but the save handler currently shows a toast and doesn't POST. Fix is to call `studentsApi.updateStudent` — added to the AddStudent dialog already, just needs to be reused.
+- **Bulk export of teachers**: only students have an export endpoint. Trivial copy when needed.
+- **Aadhaar full storage**: still last-4 only. Full encrypted Aadhaar lands in a v2 with proper key management.
+- **Phone uniqueness scope**: globally unique for now (carried over from Module 1).
 
-To skip the seed on container start, set `SKOOLY_SEED_DEMO=false` in the api service env.
-
-## Open questions
-
-- **User phone uniqueness scope.** Made globally unique for v1 because `USERNAME_FIELD` must be. Same teacher at multiple schools → multiple phones for now.
-- **Module 2-lite scope.** Skipped: full student/teacher CRUD, Excel bulk import, photo upload, transfer/promotion flows. These come with proper Module 2.
-- **Frontend mock parity.** MSW handlers only cover auth + school endpoints. If you want offline mode for the new student/class/teacher pages, would need to extend `src/mocks/handlers/`.
-- **RLS in tests.** Test runner uses SQLite (no Docker required). RLS is Postgres-only and disabled in tests; cross-tenant isolation is covered at the manager+middleware+HTTP level in the test suite.
-
-## Test status
+## Commands
 
 ```bash
-uv run ruff check .        # all checks pass
-uv run pytest --cov=apps   # 27 tests pass, ~88% coverage on Module 1 code
+# Backend
+uv run ruff check .        # all clean
+uv run pytest --tb=no -q   # 64 passing
+uv run python manage.py seed_demo
+
+# Stack
+docker compose up          # postgres + redis + Django (auto-migrate + auto-seed)
+
+# Frontend (separate terminal)
+cd ~/git/skooly-stride && bun run dev
 ```
-
-Module 2-lite endpoints don't yet have a dedicated test file — covered by manual smoke-test against the seeded DB. Will add when full Module 2 lands.
-
-## Frontend sync status
-
-- Last sync: 2026-05-17
-- Frontend repo HEAD: (uncommitted)
-- Real-API pages: `/login`, `/signup`, `/admin/students`, `/admin/students/:id`.
-- Mock-only pages (still using `lib/*-data.ts`): attendance, tests, fees, classes detail, teachers, announcements, analytics, report cards. These will be migrated as the corresponding backend modules land.

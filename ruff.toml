@@ -21,6 +21,6 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-"**/tests/**" = ["S", "DJ"]
+"**/tests/**" = ["S", "DJ", "E501"]
 "**/migrations/*" = ["E501", "N806"]
 "config/settings/*" = ["F405", "F403", "S104"]

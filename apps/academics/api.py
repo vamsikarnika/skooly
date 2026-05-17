@@ -1,4 +1,4 @@
-"""Academics read endpoints (classes + nested sections + subjects)."""
+"""Academics endpoints: classes (+ sections), subjects, teacher assignments."""
 
 from __future__ import annotations
 
@@ -6,11 +6,41 @@ from django.db.models import Count, Q
 from django.http import HttpRequest
 from ninja import Query, Router
 
-from apps.academics.models import Class, Subject
+from apps.academics import services_write
+from apps.academics.models import Class, Section, Subject, TeacherAssignment
 from apps.academics.schemas import ClassOut, SectionOut, SubjectOut
+from apps.academics.schemas_in import (
+    ClassCreateRequest,
+    ClassUpdateRequest,
+    SectionCreateRequest,
+    SectionUpdateRequest,
+    SubjectCreateRequest,
+    SubjectUpdateRequest,
+    TeacherAssignmentRequest,
+)
 from apps.accounts.auth import jwt_auth
+from apps.accounts.models import Role
+from apps.core.exceptions import Forbidden, NotFound
+from apps.core.helpers import get_in_tenant
+from apps.core.schemas import ActionResponse
 
 router = Router(tags=["academics"], auth=jwt_auth, by_alias=True)
+
+
+def _user(request: HttpRequest):  # type: ignore[no-untyped-def]
+    return request.auth  # type: ignore[attr-defined]
+
+
+def _require_admin(request: HttpRequest) -> None:
+    if _user(request).role != Role.ADMIN:
+        raise Forbidden("Admin role required.")
+
+
+def _school(request: HttpRequest):  # type: ignore[no-untyped-def]
+    school = _user(request).school
+    if school is None:
+        raise NotFound("Current user has no school.")
+    return school
 
 
 def _section_to_dict(section) -> dict:  # type: ignore[no-untyped-def]
@@ -30,25 +60,30 @@ def _section_to_dict(section) -> dict:  # type: ignore[no-untyped-def]
     }
 
 
+# ----- Classes (with nested sections) ----------------------------------------
+
 @router.get("/classes", response=list[ClassOut])
 def list_classes(
     request: HttpRequest,
     academic_year_id: int | None = Query(default=None, alias="academicYearId"),
 ) -> list[dict]:
-    qs = Class.objects.prefetch_related("sections__class_teacher").annotate(
-        student_count=Count(
-            "sections__enrollments",
-            filter=Q(sections__enrollments__status="active"),
-            distinct=True,
-        ),
+    school = _school(request)
+    qs = (
+        Class.objects.filter(school=school)
+        .prefetch_related("sections__class_teacher")
+        .annotate(
+            student_count=Count(
+                "sections__enrollments",
+                filter=Q(sections__enrollments__status="active"),
+                distinct=True,
+            ),
+        )
     )
     if academic_year_id:
         qs = qs.filter(academic_year_id=academic_year_id)
     out = []
     for cls in qs:
-        sections = []
-        for section in cls.sections.all():
-            sections.append(_section_to_dict(section))
+        sections = [_section_to_dict(s) for s in cls.sections.all()]
         out.append({
             "id": cls.id,
             "name": cls.name,
@@ -60,22 +95,160 @@ def list_classes(
     return out
 
 
+@router.post("/classes", response=ClassOut)
+def create_class(request: HttpRequest, payload: ClassCreateRequest) -> dict:
+    _require_admin(request)
+    cls = services_write.create_class(
+        school=_school(request),
+        actor_id=_user(request).id,
+        data=payload.model_dump(by_alias=False),
+    )
+    return {
+        "id": cls.id, "name": cls.name, "academic_year_id": cls.academic_year_id,
+        "display_order": cls.display_order, "sections": [], "student_count": 0,
+    }
+
+
+@router.patch("/classes/{class_id}", response=ClassOut)
+def update_class(request: HttpRequest, class_id: int, payload: ClassUpdateRequest) -> dict:
+    _require_admin(request)
+    cls = services_write.update_class(
+        school=_school(request),
+        actor_id=_user(request).id,
+        class_id=class_id,
+        data=payload.model_dump(by_alias=False, exclude_unset=True),
+    )
+    return {
+        "id": cls.id, "name": cls.name, "academic_year_id": cls.academic_year_id,
+        "display_order": cls.display_order, "sections": [], "student_count": 0,
+    }
+
+
+@router.delete("/classes/{class_id}", response=ActionResponse)
+def delete_class(request: HttpRequest, class_id: int) -> ActionResponse:
+    _require_admin(request)
+    services_write.delete_class(
+        school=_school(request), actor_id=_user(request).id, class_id=class_id
+    )
+    return ActionResponse(success=True, message="Class deleted.")
+
+
+# ----- Sections --------------------------------------------------------------
+
 @router.get("/sections/{section_id}", response=SectionOut)
 def get_section(request: HttpRequest, section_id: int):  # type: ignore[no-untyped-def]
-    from apps.academics.models import Section
-
+    school = _school(request)
     section = (
-        Section.objects.select_related("class_teacher", "class_obj")
-        .filter(id=section_id)
+        Section.objects.filter(school=school, id=section_id)
+        .select_related("class_teacher", "class_obj")
         .first()
     )
     if section is None:
-        from apps.core.exceptions import NotFound
-
         raise NotFound("Section not found.")
     return _section_to_dict(section)
 
 
+@router.post("/sections", response=SectionOut)
+def create_section(request: HttpRequest, payload: SectionCreateRequest) -> dict:
+    _require_admin(request)
+    section = services_write.create_section(
+        school=_school(request),
+        actor_id=_user(request).id,
+        data=payload.model_dump(by_alias=False),
+    )
+    return _section_to_dict(section)
+
+
+@router.patch("/sections/{section_id}", response=SectionOut)
+def update_section(
+    request: HttpRequest, section_id: int, payload: SectionUpdateRequest
+) -> dict:
+    _require_admin(request)
+    section = services_write.update_section(
+        school=_school(request),
+        actor_id=_user(request).id,
+        section_id=section_id,
+        data=payload.model_dump(by_alias=False, exclude_unset=True),
+    )
+    return _section_to_dict(section)
+
+
+@router.delete("/sections/{section_id}", response=ActionResponse)
+def delete_section(request: HttpRequest, section_id: int) -> ActionResponse:
+    _require_admin(request)
+    services_write.delete_section(
+        school=_school(request), actor_id=_user(request).id, section_id=section_id
+    )
+    return ActionResponse(success=True, message="Section deleted.")
+
+
+# ----- Subjects --------------------------------------------------------------
+
 @router.get("/subjects", response=list[SubjectOut])
 def list_subjects(request: HttpRequest) -> list[SubjectOut]:
-    return [SubjectOut.from_orm(s) for s in Subject.objects.all()]
+    school = _school(request)
+    return [SubjectOut.from_orm(s) for s in Subject.objects.filter(school=school)]
+
+
+@router.post("/subjects", response=SubjectOut)
+def create_subject(request: HttpRequest, payload: SubjectCreateRequest) -> SubjectOut:
+    _require_admin(request)
+    subject = services_write.create_subject(
+        school=_school(request),
+        actor_id=_user(request).id,
+        data=payload.model_dump(by_alias=False),
+    )
+    return SubjectOut.from_orm(subject)
+
+
+@router.patch("/subjects/{subject_id}", response=SubjectOut)
+def update_subject(
+    request: HttpRequest, subject_id: int, payload: SubjectUpdateRequest
+) -> SubjectOut:
+    _require_admin(request)
+    subject = services_write.update_subject(
+        school=_school(request),
+        actor_id=_user(request).id,
+        subject_id=subject_id,
+        data=payload.model_dump(by_alias=False, exclude_unset=True),
+    )
+    return SubjectOut.from_orm(subject)
+
+
+@router.delete("/subjects/{subject_id}", response=ActionResponse)
+def delete_subject(request: HttpRequest, subject_id: int) -> ActionResponse:
+    _require_admin(request)
+    services_write.delete_subject(
+        school=_school(request), actor_id=_user(request).id, subject_id=subject_id
+    )
+    return ActionResponse(success=True, message="Subject deleted.")
+
+
+# ----- Teacher assignments ---------------------------------------------------
+
+@router.post("/teacher-assignments", response=ActionResponse)
+def create_teacher_assignment(
+    request: HttpRequest, payload: TeacherAssignmentRequest
+) -> ActionResponse:
+    _require_admin(request)
+    assignment = services_write.create_teacher_assignment(
+        school=_school(request),
+        actor_id=_user(request).id,
+        data=payload.model_dump(by_alias=False),
+    )
+    return ActionResponse(
+        success=True,
+        message="Assignment created.",
+        data={"id": assignment.id},
+    )
+
+
+@router.delete("/teacher-assignments/{assignment_id}", response=ActionResponse)
+def delete_teacher_assignment(request: HttpRequest, assignment_id: int) -> ActionResponse:
+    _require_admin(request)
+    school = _school(request)
+    get_in_tenant(TeacherAssignment, school, pk=assignment_id)
+    services_write.delete_teacher_assignment(
+        school=school, actor_id=_user(request).id, assignment_id=assignment_id
+    )
+    return ActionResponse(success=True, message="Assignment removed.")

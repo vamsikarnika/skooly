@@ -99,7 +99,13 @@ class StudentEnrollment(TenantScopedModel):
 
     class Meta:
         db_table = "student_enrollments"
-        unique_together = [("student", "academic_year")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "academic_year"],
+                condition=models.Q(status="active"),
+                name="uniq_active_enrollment_per_year",
+            ),
+        ]
         indexes = [
             models.Index(fields=["section", "status"]),
             models.Index(fields=["academic_year", "status"]),

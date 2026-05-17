@@ -56,3 +56,19 @@ class TeacherOut(CamelSchema):
 
 class TeacherListOut(Paginated[TeacherOut]):
     pass
+
+
+class BulkImportRowError(CamelSchema):
+    row: int
+    field: str
+    message: str
+
+
+class BulkImportResponse(CamelSchema):
+    ok: bool
+    dry_run: bool
+    row_count: int
+    valid_rows: int
+    error_count: int
+    errors: list[BulkImportRowError]
+    imported: int

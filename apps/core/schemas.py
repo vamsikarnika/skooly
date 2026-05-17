@@ -6,10 +6,22 @@ CamelCase at the API boundary, snake_case in Python. The frontend sees
 
 from __future__ import annotations
 
-from typing import Generic, TypeVar
+import re
+from typing import Annotated, Generic, TypeVar
 
 from ninja import Schema
-from pydantic import ConfigDict
+from pydantic import ConfigDict, StringConstraints
+
+# Indian phone numbers in our system: +91 + 10 digits, no spaces.
+# Use as: ``phone: PhoneIN`` in schemas.
+PhoneIN = Annotated[str, StringConstraints(pattern=r"^\+91[0-9]{10}$")]
+PhoneINOptional = Annotated[str, StringConstraints(pattern=r"^(\+91[0-9]{10})?$")]
+
+_PHONE_RE = re.compile(r"^\+91[0-9]{10}$")
+
+
+def is_valid_in_phone(value: str) -> bool:
+    return bool(_PHONE_RE.match(value))
 
 
 def _to_camel(s: str) -> str:
