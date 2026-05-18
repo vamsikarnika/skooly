@@ -1,0 +1,105 @@
+"""Read-only test endpoints. POST/score-entry/publish lives in the
+teacher-app build, not in Module 4."""
+
+from __future__ import annotations
+
+from datetime import date as date_type
+from datetime import timedelta
+
+from django.http import HttpRequest
+from ninja import Query, Router
+
+from apps.academics.models import Section
+from apps.accounts.auth import jwt_auth
+from apps.core.exceptions import NotFound
+from apps.core.helpers import get_in_tenant
+from apps.core.pagination import paginate
+from apps.exams import services
+from apps.exams.models import Test
+from apps.exams.schemas import (
+    StudentScoresHistoryOut,
+    TestDetailOut,
+    TestListOut,
+    TestSummaryOut,
+)
+from apps.people.models import Student
+
+router = Router(tags=["exams"], auth=jwt_auth, by_alias=True)
+
+
+def _school(request: HttpRequest):  # type: ignore[no-untyped-def]
+    school = request.auth.school  # type: ignore[attr-defined]
+    if school is None:
+        raise NotFound("Current user has no school.")
+    return school
+
+
+@router.get("/tests", response=TestListOut)
+def list_tests(
+    request: HttpRequest,
+    section_id: int | None = Query(default=None, alias="sectionId"),
+    class_id: int | None = Query(default=None, alias="classId"),
+    subject_id: int | None = Query(default=None, alias="subjectId"),
+    test_type: str | None = Query(default=None, alias="testType"),
+    from_date: date_type | None = Query(default=None, alias="from"),
+    to_date: date_type | None = Query(default=None, alias="to"),
+    page: int = Query(default=1),
+    page_size: int = Query(default=50, alias="pageSize"),
+) -> dict:
+    qs = services.list_published_tests(
+        school=_school(request),
+        section_id=section_id,
+        class_id=class_id,
+        subject_id=subject_id,
+        test_type=test_type,
+        from_date=from_date,
+        to_date=to_date,
+    )
+    payload = paginate(qs, page=page, page_size=page_size)
+    payload["items"] = [services.test_summary_dict(t) for t in payload["items"]]
+    return payload
+
+
+@router.get("/tests/{test_id}", response=TestDetailOut)
+def get_test(request: HttpRequest, test_id: int) -> dict:
+    school = _school(request)
+    test = (
+        Test.objects.filter(school=school, id=test_id, published_at__isnull=False)
+        .select_related("section__class_obj", "subject", "created_by")
+        .prefetch_related("scores")
+        .first()
+    )
+    if test is None:
+        raise NotFound("Test not found.")
+    return services.test_detail_dict(test)
+
+
+@router.get("/sections/{section_id}/tests", response=list[TestSummaryOut])
+def list_section_tests(
+    request: HttpRequest,
+    section_id: int,
+    from_date: date_type | None = Query(default=None, alias="from"),
+    to_date: date_type | None = Query(default=None, alias="to"),
+) -> list[dict]:
+    school = _school(request)
+    get_in_tenant(Section, school, pk=section_id)
+    qs = services.list_published_tests(
+        school=school, section_id=section_id, from_date=from_date, to_date=to_date
+    )
+    return [services.test_summary_dict(t) for t in qs]
+
+
+@router.get("/students/{student_id}/scores", response=StudentScoresHistoryOut)
+def student_scores(
+    request: HttpRequest,
+    student_id: int,
+    from_date: date_type | None = Query(default=None, alias="from"),
+    to_date: date_type | None = Query(default=None, alias="to"),
+) -> dict:
+    school = _school(request)
+    student = get_in_tenant(Student, school, pk=student_id)
+    fd = from_date or (date_type.today() - timedelta(days=365))
+    td = to_date or date_type.today()
+    return services.student_scores_history(
+        school=school, student=student, from_date=fd, to_date=td
+    )

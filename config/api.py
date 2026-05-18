@@ -4,7 +4,9 @@ from ninja import NinjaAPI
 
 from apps.academics.api import router as academics_router
 from apps.accounts.api import router as accounts_router
+from apps.attendance.api import router as attendance_router
 from apps.core.exceptions import register_exception_handlers
+from apps.exams.api import router as exams_router
 from apps.people.api import router as people_router
 from apps.schools.api import router as schools_router
 
@@ -20,5 +22,7 @@ api.add_router("/auth/", accounts_router)
 api.add_router("/schools/", schools_router)
 api.add_router("/", people_router)
 api.add_router("/", academics_router)
+api.add_router("/", attendance_router)
+api.add_router("/", exams_router)
 
 register_exception_handlers(api)
