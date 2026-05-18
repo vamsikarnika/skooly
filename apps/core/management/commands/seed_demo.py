@@ -31,6 +31,13 @@ from apps.accounts.models import User
 from apps.attendance.models import Attendance, AttendanceStatus
 from apps.core.context import use_school
 from apps.exams.models import Test, TestScore, TestType
+from apps.fees import services as fees_services
+from apps.fees.models import (
+    FeeStructure,
+    PaymentMode,
+    StudentFee,
+    StudentFeeComponent,
+)
 from apps.people.models import Gender, Relation, Student, StudentStatus, Teacher
 from apps.schools.models import AcademicYear, Board, School
 
@@ -178,6 +185,13 @@ class Command(BaseCommand):
                 tests_total, scores_total = self._seed_tests(rng, school, teachers)
                 self.stdout.write(self.style.SUCCESS(
                     f"  ✓ tests: {tests_total} published tests with {scores_total:,} scores"
+                ))
+
+                fee_stats = self._seed_fees(rng, school)
+                self.stdout.write(self.style.SUCCESS(
+                    f"  ✓ fees: {fee_stats['structures']} structures, "
+                    f"{fee_stats['student_fees']:,} student fees, "
+                    f"{fee_stats['payments']:,} payments"
                 ))
 
         self.stdout.write(self.style.SUCCESS("Demo seed complete."))
@@ -559,3 +573,192 @@ class Command(BaseCommand):
 
         TestScore.objects.bulk_create(score_rows, batch_size=2000)
         return test_count, score_count
+
+    def _seed_fees(self, rng: random.Random, school: School) -> dict[str, int]:
+        """Create one fee structure per class for the current academic year,
+        apply to every student, then generate a realistic payment distribution:
+        ~35% fully paid, ~25% partial, ~30% pending, ~10% overdue.
+
+        Skips PDF receipt generation in seed (WeasyPrint is slow at volume;
+        admins can regenerate on demand). receipt_pdf_url stays empty.
+        """
+        year = school.current_academic_year
+        assert year is not None
+
+        # Fee structures per grade level (paise). AP State Board realistic
+        # ranges: ~₹15k for primary, ~₹35-50k for high school.
+        class_fee_plans = {
+            # class_order: (structure_name, [(component_name, paise, due_offset_days, optional?)])
+            1: ("Class 1 Annual Fees", [
+                ("Tuition", 12_00_000, 0, False),
+                ("Books & Stationery", 2_50_000, 30, False),
+                ("Transport", 8_00_000, 0, True),
+            ]),
+            2: ("Class 2 Annual Fees", [
+                ("Tuition", 13_00_000, 0, False),
+                ("Books & Stationery", 2_50_000, 30, False),
+                ("Transport", 8_00_000, 0, True),
+            ]),
+            3: ("Class 3 Annual Fees", [
+                ("Tuition", 14_00_000, 0, False),
+                ("Books & Stationery", 3_00_000, 30, False),
+                ("Transport", 9_00_000, 0, True),
+            ]),
+            4: ("Class 4 Annual Fees", [
+                ("Tuition", 15_00_000, 0, False),
+                ("Books & Stationery", 3_00_000, 30, False),
+                ("Transport", 9_00_000, 0, True),
+            ]),
+            5: ("Class 5 Annual Fees", [
+                ("Tuition", 16_00_000, 0, False),
+                ("Books & Stationery", 3_50_000, 30, False),
+                ("Transport", 9_00_000, 0, True),
+            ]),
+            6: ("Class 6 Annual Fees", [
+                ("Tuition", 28_00_000, 0, False),
+                ("Books & Stationery", 4_00_000, 30, False),
+                ("Lab Fee", 2_00_000, 60, False),
+                ("Computer Fee", 1_50_000, 60, False),
+                ("Transport", 12_00_000, 0, True),
+            ]),
+            7: ("Class 7 Annual Fees", [
+                ("Tuition", 30_00_000, 0, False),
+                ("Books & Stationery", 4_00_000, 30, False),
+                ("Lab Fee", 2_00_000, 60, False),
+                ("Computer Fee", 1_50_000, 60, False),
+                ("Transport", 12_00_000, 0, True),
+            ]),
+            8: ("Class 8 Annual Fees", [
+                ("Tuition", 35_00_000, 0, False),
+                ("Books & Stationery", 4_50_000, 30, False),
+                ("Lab Fee", 2_50_000, 60, False),
+                ("Computer Fee", 1_50_000, 60, False),
+                ("Transport", 12_00_000, 0, True),
+            ]),
+            9: ("Class 9 Annual Fees", [
+                ("Tuition", 42_00_000, 0, False),
+                ("Books & Stationery", 5_00_000, 30, False),
+                ("Lab Fee", 3_00_000, 60, False),
+                ("Computer Fee", 2_00_000, 60, False),
+                ("Transport", 12_00_000, 0, True),
+            ]),
+            10: ("Class 10 Annual Fees", [
+                ("Tuition", 48_00_000, 0, False),
+                ("Books & Stationery", 5_00_000, 30, False),
+                ("Lab Fee", 3_00_000, 60, False),
+                ("Computer Fee", 2_00_000, 60, False),
+                ("Board Exam Fee", 1_50_000, 90, False),
+                ("Transport", 12_00_000, 0, True),
+            ]),
+        }
+
+        # Term-start date for due-date calculations.
+        term_start = year.start_date
+
+        structures: list[FeeStructure] = []
+        for cls in Class.objects.filter(school=school, academic_year=year).order_by("display_order"):
+            plan = class_fee_plans.get(cls.display_order)
+            if plan is None:
+                continue
+            structure_name, components_plan = plan
+            components_payload = [
+                {
+                    "name": name,
+                    "amount_paise": amount,
+                    "due_date": term_start + timedelta(days=offset),
+                    "is_optional": optional,
+                    "display_order": idx,
+                }
+                for idx, (name, amount, offset, optional) in enumerate(components_plan)
+            ]
+            structure = fees_services.create_structure(
+                school=school,
+                actor_id=None,  # type: ignore[arg-type]
+                academic_year_id=year.id,
+                class_id=cls.id,
+                name=structure_name,
+                components=components_payload,
+            )
+            structures.append(structure)
+            fees_services.apply_structure_to_class(
+                school=school, actor_id=None, structure_id=structure.id  # type: ignore[arg-type]
+            )
+
+        # Generate payments. For each StudentFee, roll a die:
+        #   35% → pay in full (one lump or split)
+        #   25% → pay partial (one payment covering 30-70% of final)
+        #   30% → no payments (pending)
+        #   10% → no payments AND we'll let the natural recompute mark overdue
+        # We don't generate PDFs in seed — too slow at this volume. Admins
+        # can regenerate later on demand.
+        admin_user = User.objects.filter(school=school, role="admin").first()
+        payment_modes = [PaymentMode.CASH, PaymentMode.CHEQUE, PaymentMode.BANK_TRANSFER, PaymentMode.ONLINE]
+        payments_made = 0
+        today = timezone.now().date()
+
+        student_fees = list(
+            StudentFee.objects.filter(school=school).select_related("fee_structure")
+        )
+        rng.shuffle(student_fees)
+
+        for sf in student_fees:
+            roll = rng.random()
+            if roll < 0.10:
+                continue  # will become overdue once recompute runs
+            if roll < 0.40:
+                continue  # pending, due date not yet passed
+
+            applicable_components = list(
+                StudentFeeComponent.objects.filter(
+                    school=school, student_fee=sf, is_applicable=True
+                ).select_related("fee_component")
+            )
+            if not applicable_components:
+                continue
+
+            full_payment = roll >= 0.75  # 25% partial, 35% full
+            paid_on = today - timedelta(days=rng.randint(5, 90))
+
+            if full_payment:
+                allocations = [
+                    {"component_id": c.id, "amount_paise": c.applied_paise}
+                    for c in applicable_components
+                ]
+            else:
+                # Partial: pay between 30% and 70% of final, spread across
+                # the first 1-2 components.
+                target_total = int(sf.final_paise * rng.uniform(0.3, 0.7))
+                allocations = []
+                remaining = target_total
+                for c in applicable_components:
+                    if remaining <= 0:
+                        break
+                    take = min(remaining, c.applied_paise)
+                    if take <= 0:
+                        continue
+                    allocations.append({"component_id": c.id, "amount_paise": take})
+                    remaining -= take
+                if not allocations:
+                    continue
+
+            fees_services.record_payment(
+                school=school,
+                actor_id=admin_user.id if admin_user else None,  # type: ignore[arg-type]
+                student_fee_id=sf.id,
+                paid_on=paid_on,
+                payment_mode=rng.choice(payment_modes),
+                reference_number=f"REF{rng.randint(10000, 99999)}",
+                notes="",
+                allocations=allocations,
+            )
+            payments_made += 1
+
+        # Final pass: recompute statuses so overdue catches any structures
+        # whose components passed their due_date.
+        fees_services.recompute_overdue_all(school=school)
+
+        return {
+            "structures": len(structures),
+            "student_fees": StudentFee.objects.filter(school=school).count(),
+            "payments": payments_made,
+        }

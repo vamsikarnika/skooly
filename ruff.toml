@@ -21,6 +21,7 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-"**/tests/**" = ["S", "DJ", "E501"]
+"**/tests/**" = ["S", "DJ", "E501", "RUF059", "B007"]
 "**/migrations/*" = ["E501", "N806"]
 "config/settings/*" = ["F405", "F403", "S104"]
+"apps/fees/receipt_pdf.py" = ["E501"]  # long HTML strings — awkward to wrap
