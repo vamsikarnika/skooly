@@ -2,16 +2,15 @@
 
 ## Current Status
 
-- Module 1: complete
-- **Module 2 (People & Structure): complete** — full CRUD for students, teachers, classes, sections, subjects, teacher assignments; bulk Excel import; Excel export; photo upload via Django default_storage (local in dev, R2 swap is a config flag).
-- Module 3+ pending.
+- Modules 1–4 complete (Module 3 & 4 read-only; teacher app will own POSTs)
+- 49 endpoints · 95 tests passing · ruff clean
 
 ## Modules
 
-- [x] Module 1: Foundation (auth, school, academic year, tenant infra)
-- [x] Module 2: People & Structure
-- [ ] Module 3: Attendance
-- [ ] Module 4: Tests & Scores
+- [x] **Module 1: Foundation** — auth, school, academic year, tenant infrastructure
+- [x] **Module 2: People & Structure** — full CRUD, bulk import, photo upload via Django default_storage
+- [x] **Module 3: Attendance (read-only)** — 4 endpoints, bulk dashboard rollup, redesigned UI
+- [x] **Module 4: Tests & Scores (read-only)** — 4 endpoints, ~3 tests per (section, subject) seeded, published-only filter
 - [ ] Module 5: WhatsApp Integration
 - [ ] Module 6: Report Cards
 - [ ] Module 7: Fees
@@ -19,103 +18,97 @@
 - [ ] Module 9: Parent Web View
 - [ ] Module 10: Polish
 
-## API Endpoints (41 total)
+## Module 4 — what shipped
 
-### Auth (`/api/v1/auth/`)
-- POST signup, login, refresh, forgot-password, verify-otp, reset-password
-- GET me (auth)
+### Endpoints (4 new, 49 total)
 
-### Schools (`/api/v1/schools/`) — admin for writes
-- GET/PATCH /current
-- GET/POST /academic-years
-- PATCH /academic-years/{id}
+- `GET /tests` — paginated, filters: `sectionId`, `classId`, `subjectId`, `testType`, `from`, `to`. **Published only** (drafts not exposed)
+- `GET /tests/{id}` — test meta + roster + every student's score (or null + is_absent flag) + computed stats (avg, max, min, scored/absent counts)
+- `GET /sections/{id}/tests` — chronological list for one section
+- `GET /students/{id}/scores?from=&to=` — history grouped by subject with per-subject average %
 
-### People (`/api/v1/`) — admin for writes
-- GET /students (paginated, filterable by classId/sectionId/status/q)
-- POST /students — admin only
-- POST /students/bulk-import — admin only, multipart .xlsx + dryRun flag
-- GET /students/export — admin only, .xlsx download
-- GET /students/{id}, PATCH, DELETE (soft → withdrawn)
-- POST /students/{id}/transfer — preserves enrollment history
-- POST /students/{id}/photo — multipart image
-- GET /teachers (paginated)
-- POST /teachers — admin only
-- GET /teachers/{id}, PATCH, DELETE (soft → inactive)
-- POST /teachers/{id}/photo
+### Data model
 
-### Academics (`/api/v1/`) — admin for writes
-- GET /classes (nested sections + student counts)
-- POST /classes, PATCH /classes/{id}, DELETE /classes/{id} (blocked if sections exist)
-- GET /sections/{id}, POST /sections, PATCH, DELETE (blocked if active enrollments)
-- GET /subjects, POST /subjects, PATCH /subjects/{id}, DELETE /subjects/{id}
-- POST /teacher-assignments, DELETE /teacher-assignments/{id}
+- `Test` (TenantScoped): section, subject, name, test_type (FA1–FA4, SA1, SA2, OTHER), test_date, max_marks, created_by, published_at (null = draft)
+- `TestScore` (TenantScoped): test, student, marks_obtained (Decimal 5,2), is_absent, entered_by, entered_at. Unique on `(test, student)`
 
-OpenAPI captured at [docs/openapi.json](openapi.json).
+### Seed
 
-## Tests
+- ~3 published tests per (section, subject) over the last 90 days
+- Mix of FA1, FA2, SA1 (50 / 50 / 100 marks)
+- Per-student ability offset (gaussian, sd 0.08) so subject averages stay realistic across tests
+- ~5% absent rate
+- **Demo numbers**: 450 tests · 12,375 scores
 
-64 passing. Module 2 adds:
+### Tests (11 new, 95 total)
 
-- **CRUD happy paths** for students, teachers, classes, sections, subjects, teacher assignments.
-- **Tenant isolation on writes**: admin A cannot create-into / patch / delete / transfer / assign / etc. any resource in school B. Every cross-tenant attempt returns 404 (no existence leak).
-- **Permission tests**: teacher role cannot use admin-only endpoints (create student, create teacher, create class, bulk import).
-- **Bulk import edge cases**: dry-run validation, all-or-nothing commit (one bad row rejects the batch), duplicate admission numbers (within file + against DB), missing required columns, invalid gender, unknown class/section, blank rows skipped, teacher role forbidden.
-- **Transfer flow**: preserves history (old enrollment marked `transferred`, new one `active`), rejects no-op transfer to same section, partial unique constraint enforces one active enrollment per (student, year).
+- Drafts excluded from `GET /tests`
+- Draft `GET /tests/{id}` returns 404
+- Stats math: 40+30+50 mean=40, absent excluded
+- Roster includes unscored students (status=null)
+- Cross-tenant isolation: list, detail, section-tests, student-scores all 404
+- Section-tests filtering scopes correctly
+- Student history: drafts excluded, average % computed
+- Absent excluded from student average
+- Auth required
 
-## Photo storage
+### Deferred to teacher-app build
 
-- All uploads go through Django's `default_storage` (`apps/core/storage.py`).
-- Dev: `FileSystemStorage` → writes to `MEDIA_ROOT/uploads/<school_id>/<kind>/<owner_id>-<ts>-<nonce>.<ext>`; served by Django in DEBUG mode.
-- Prod: set `USE_R2=True` + credentials → same calls hit Cloudflare R2.
-- Pillow resizes to max 1024×1024 and re-encodes (JPEG q=85). Max 5 MB. Allowed: jpeg/png/webp.
-- **TODO**: when first prod school onboards, flip `USE_R2=True` and verify CDN URLs. No code change required.
+- `POST /tests` (create draft)
+- `POST /tests/{id}/scores` (bulk paste-from-Excel)
+- `POST /tests/{id}/publish` (with WhatsApp queue writes for Module 5)
+- `POST /tests/{id}/unpublish` (admin only)
+- Edit window enforcement
 
-## Demo seed (unchanged from Module 1)
+## Module 3 — quick recap
 
-`docker compose up` → postgres + redis + Django auto-migrate + auto-seed.
+- `GET /attendance/sections?date=` — single bulk endpoint for dashboard (1 API call, 4 DB queries regardless of section count; 6ms for 24 sections in the demo)
+- `GET /sections/{id}/attendance?date=` — per-section roster + marks
+- `GET /sections/{id}/attendance/summary?from=&to=` — per-student attendance %
+- `GET /students/{id}/attendance?from=&to=` — student history
 
-- **School**: Vidya Bharati High School (Vijayawada, AP State Board)
-- 10 classes, 24 sections, 18 teachers, 9 subjects, ~660 students
-- **Admin login**: `+919876543210` / `demo1234`
+### Attendance UI redesign
 
-`python manage.py seed_demo --reset` to wipe and recreate.
+Replaced the flat-grid-of-cards with a dense list grouped by class, top stats strip (sections marked, not yet marked, absent count), search + filter chips (All / Unmarked / With absences), date picker. Scales to 100+ sections.
 
-## Frontend wiring
+## Frontend pages on real API
 
-Real-API pages:
 - `/login`, `/signup`
-- `/admin/students` — list with pagination, class/section/status filters, search; row actions: View / Edit / Transfer / Withdraw via dropdown
-- `/admin/students/:id` — detail (Profile tab live; Attendance/Marks/Fees/Comms placeholders for their modules)
-- `/admin/teachers` — list, add, edit, mark inactive
-- `/admin/teachers/:id` — detail
+- `/admin/students` + detail (Profile, Attendance, Marks tabs all live)
+- `/admin/teachers` + detail
+- `/admin/attendance` (redesigned) + section detail
+- `/admin/tests` + detail (matching density-first design as attendance)
 
-Frontend components added:
-- `components/students/StudentFormDialog.tsx` — create/edit
-- `components/students/BulkImportDialog.tsx` — two-phase (validate → commit) with per-row error display
-- `components/teachers/TeacherFormDialog.tsx` — create/edit
+Auth guard: `beforeLoad` on `/admin` and `/teacher` redirect to `/login?redirect=…` when no token; client-side handler on 401 (with refresh failure) also bounces to login.
 
-Pages still using mock data: attendance, fees, tests, classes detail, announcements, analytics, report cards. These migrate as their backend modules land.
+## Demo flow
 
-## Open questions / known gaps
+```bash
+cd ~/git/skooly && docker compose up -d --build api
+cd ~/git/skooly-stride && bun run dev
+```
 
-- **Classes admin CRUD UI**: not yet built — list page already shows live data from `GET /classes`, but creating/editing classes/sections from the UI hasn't been wired. Backend endpoints exist (`POST/PATCH/DELETE /classes` and `/sections`); building the UI is ~half a day. Deferred until needed.
-- **Photo upload UI**: backend endpoint exists; no UI button yet. Add to student/teacher detail pages when needed.
-- **Student detail edit**: the detail page has an Edit button that opens an inline form, but the save handler currently shows a toast and doesn't POST. Fix is to call `studentsApi.updateStudent` — added to the AddStudent dialog already, just needs to be reused.
-- **Bulk export of teachers**: only students have an export endpoint. Trivial copy when needed.
-- **Aadhaar full storage**: still last-4 only. Full encrypted Aadhaar lands in a v2 with proper key management.
-- **Phone uniqueness scope**: globally unique for now (carried over from Module 1).
+Login: `+919876543210` / `demo1234`
+
+End-to-end you can now see:
+1. **Students** → list, add, edit, transfer, withdraw, bulk import, export
+2. **Teachers** → list, add, edit, mark inactive
+3. **Attendance** → dashboard with stats, drill into section/date, student history
+4. **Tests** → 450 tests across sections/subjects, filter by class/subject/type, drill into a test for ranked scores + class average + pass rate
+5. **Student detail** → Profile, Attendance (60-day history with %), Marks (grouped by subject with per-subject avg %)
+
+## Open / pending
+
+- **Uncommitted**: Modules 3 (attendance), 3.5 (UX redesign), auth-redirect fix, Module 4 (this one). 4–5 logical commits worth.
+- **Backend exists, no UI yet**: Classes admin CRUD; photo upload widget.
+- **Stub**: Student-detail Edit form save handler (still toasts).
+- **Phone uniqueness**: globally unique (Django auth requirement). Revisit if teachers need multi-school accounts.
+- **Test naming uniqueness**: no constraint preventing two "FA1 · Unit Test · Math · Class 6-A · 2026-05-01" rows. Probably fine — tests are dated; rename if duplicate is intentional.
 
 ## Commands
 
 ```bash
-# Backend
-uv run ruff check .        # all clean
-uv run pytest --tb=no -q   # 64 passing
-uv run python manage.py seed_demo
-
-# Stack
-docker compose up          # postgres + redis + Django (auto-migrate + auto-seed)
-
-# Frontend (separate terminal)
-cd ~/git/skooly-stride && bun run dev
+uv run ruff check .        # clean
+uv run pytest --tb=no -q   # 95 passing
+uv run python manage.py seed_demo --reset  # regenerate everything
 ```

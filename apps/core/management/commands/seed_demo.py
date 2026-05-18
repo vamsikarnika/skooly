@@ -12,11 +12,12 @@ The seeded school admin can log in with:
 from __future__ import annotations
 
 import random
-from datetime import date
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.utils import timezone
 
 from apps.academics.models import (
     Class,
@@ -27,7 +28,9 @@ from apps.academics.models import (
     TeacherAssignment,
 )
 from apps.accounts.models import User
+from apps.attendance.models import Attendance, AttendanceStatus
 from apps.core.context import use_school
+from apps.exams.models import Test, TestScore, TestType
 from apps.people.models import Gender, Relation, Student, StudentStatus, Teacher
 from apps.schools.models import AcademicYear, Board, School
 
@@ -166,6 +169,16 @@ class Command(BaseCommand):
                         )
                         total_students += count
                 self.stdout.write(self.style.SUCCESS(f"  ✓ students: {total_students}"))
+
+                marks_total = self._seed_attendance(rng, school)
+                self.stdout.write(self.style.SUCCESS(
+                    f"  ✓ attendance: {marks_total:,} marks across ~60 school days"
+                ))
+
+                tests_total, scores_total = self._seed_tests(rng, school, teachers)
+                self.stdout.write(self.style.SUCCESS(
+                    f"  ✓ tests: {tests_total} published tests with {scores_total:,} scores"
+                ))
 
         self.stdout.write(self.style.SUCCESS("Demo seed complete."))
 
@@ -352,3 +365,197 @@ class Command(BaseCommand):
                 enrollment_date=date(admission_year, 6, 15),
                 status="active",
             )
+
+    def _seed_attendance(self, rng: random.Random, school: School) -> int:
+        """Generate ~60 school days of attendance (Mon-Sat) ending yesterday.
+
+        Per-student baseline attendance rate is sampled from a distribution
+        skewed high (mean ~93%) so most kids are mostly present, with a
+        handful of regular absentees for realism.
+        """
+        today = timezone.now().date()
+        # Last 90 calendar days; we'll skip Sundays giving ~78 marking days.
+        # Cap at 60 days actually marked to keep volume manageable.
+        candidate_days: list[date] = []
+        d = today - timedelta(days=1)
+        while len(candidate_days) < 60 and d > today - timedelta(days=120):
+            if d.weekday() != 6:  # 6 = Sunday
+                candidate_days.append(d)
+            d -= timedelta(days=1)
+        candidate_days.reverse()
+
+        # Pre-compute (section, [(student, base_rate, marked_by_teacher)]).
+        sections = list(
+            Section.objects.filter(school=school).select_related("class_teacher")
+        )
+        per_section: dict[int, list[tuple[Student, float, Teacher | None]]] = {}
+        for section in sections:
+            students = list(
+                Student.objects.filter(
+                    school=school,
+                    enrollments__section=section,
+                    enrollments__status="active",
+                ).distinct()
+            )
+            roster = [
+                (
+                    s,
+                    # base attendance rate: mean ~0.93, min ~0.70
+                    max(0.70, min(0.99, rng.gauss(0.93, 0.05))),
+                    section.class_teacher,
+                )
+                for s in students
+            ]
+            per_section[section.id] = roster
+
+        rows: list[Attendance] = []
+        for day in candidate_days:
+            for section in sections:
+                for student, base_rate, teacher in per_section[section.id]:
+                    r = rng.random()
+                    if r < base_rate:
+                        # Most are present; small chance of late
+                        status = (
+                            AttendanceStatus.LATE
+                            if rng.random() < 0.04
+                            else AttendanceStatus.PRESENT
+                        )
+                    else:
+                        # Absent group; small chance of half-day instead
+                        status = (
+                            AttendanceStatus.HALF_DAY
+                            if rng.random() < 0.15
+                            else AttendanceStatus.ABSENT
+                        )
+                    marked_dt = timezone.make_aware(
+                        datetime.combine(day, time(9, rng.randint(0, 30)))
+                    )
+                    rows.append(
+                        Attendance(
+                            school=school,
+                            student=student,
+                            section=section,
+                            date=day,
+                            status=status,
+                            marked_by=teacher,
+                            marked_at=marked_dt,
+                            notes="",
+                        )
+                    )
+
+        Attendance.objects.bulk_create(rows, batch_size=2000)
+
+        # bulk_create skips auto_now_add, so set marked_at explicitly via UPDATE.
+        # (We already pass marked_at above; the auto_now_add is harmless for bulk_create.)
+        return len(rows)
+
+    def _seed_tests(
+        self, rng: random.Random, school: School, teachers: list[Teacher]
+    ) -> tuple[int, int]:
+        """For each (section, subject) generate ~3 published tests over the last
+        90 days. Per-student score is sampled from a normal distribution skewed
+        toward 60-80% of max marks; ~5% absent rate. Some students consistently
+        do better or worse so subject averages look realistic across tests."""
+        from decimal import Decimal
+
+        from apps.academics.models import (
+            Section as SectionModel,
+        )
+        from apps.academics.models import (
+            SubjectClassMapping as Mapping,
+        )
+
+        today = timezone.now().date()
+
+        # Cache: section_id -> list of (student, ability) where ability in [-0.2, +0.2]
+        # is a per-student offset on the score distribution mean.
+        section_rosters: dict[int, list[tuple[Student, float]]] = {}
+        sections = SectionModel.objects.filter(school=school).select_related("class_obj")
+        for section in sections:
+            students = list(
+                Student.objects.filter(
+                    school=school,
+                    enrollments__section=section,
+                    enrollments__status="active",
+                ).distinct()
+            )
+            section_rosters[section.id] = [
+                (s, rng.gauss(0.0, 0.08)) for s in students
+            ]
+
+        test_count = 0
+        score_count = 0
+        score_rows: list[TestScore] = []
+
+        # Distribution of test types and their characteristics.
+        plans = [
+            (TestType.FA1, "FA1 · Unit Test", 50, 70),
+            (TestType.FA2, "FA2 · Unit Test", 50, 50),
+            (TestType.SA1, "SA1 · Term Exam", 100, 30),
+        ]
+
+        for section in sections:
+            roster = section_rosters[section.id]
+            if not roster:
+                continue
+            subjects_for_class = [
+                m.subject
+                for m in Mapping.objects.filter(
+                    school=school, class_obj=section.class_obj
+                ).select_related("subject")
+            ]
+            if not subjects_for_class:
+                continue
+
+            for subject in subjects_for_class:
+                for test_type, name_suffix, max_marks, days_ago in plans:
+                    test_date = today - timedelta(days=days_ago + rng.randint(-3, 3))
+                    published_at = timezone.make_aware(
+                        datetime.combine(
+                            test_date + timedelta(days=rng.randint(1, 4)),
+                            time(16, rng.randint(0, 45)),
+                        )
+                    )
+                    test = Test.objects.create(
+                        school=school,
+                        section=section,
+                        subject=subject,
+                        name=f"{subject.name} {name_suffix}",
+                        test_type=test_type,
+                        test_date=test_date,
+                        max_marks=max_marks,
+                        created_by=section.class_teacher or rng.choice(teachers),
+                        published_at=published_at,
+                    )
+                    test_count += 1
+
+                    for student, ability in roster:
+                        if rng.random() < 0.05:
+                            score_rows.append(
+                                TestScore(
+                                    school=school,
+                                    test=test,
+                                    student=student,
+                                    marks_obtained=None,
+                                    is_absent=True,
+                                )
+                            )
+                            score_count += 1
+                            continue
+                        # Mean 0.72 (~72%) + per-student ability offset, sd 0.12,
+                        # clamped to [0.25, 1.0] of max_marks.
+                        pct = max(0.25, min(1.0, rng.gauss(0.72 + ability, 0.12)))
+                        marks = round(Decimal(pct * max_marks), 2)
+                        score_rows.append(
+                            TestScore(
+                                school=school,
+                                test=test,
+                                student=student,
+                                marks_obtained=marks,
+                                is_absent=False,
+                            )
+                        )
+                        score_count += 1
+
+        TestScore.objects.bulk_create(score_rows, batch_size=2000)
+        return test_count, score_count
