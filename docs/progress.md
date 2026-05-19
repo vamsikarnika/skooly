@@ -2,86 +2,121 @@
 
 ## Current Status
 
-- Modules 1–4 complete (Module 3 & 4 read-only; teacher app will own POSTs)
-- 49 endpoints · 95 tests passing · ruff clean
+- Modules 1–4 + 7 complete (Module 5 on hold, Module 6 pending)
+- 62 endpoints · 116 tests passing · ruff clean
 
 ## Modules
 
 - [x] **Module 1: Foundation** — auth, school, academic year, tenant infrastructure
-- [x] **Module 2: People & Structure** — full CRUD, bulk import, photo upload via Django default_storage
-- [x] **Module 3: Attendance (read-only)** — 4 endpoints, bulk dashboard rollup, redesigned UI
-- [x] **Module 4: Tests & Scores (read-only)** — 4 endpoints, ~3 tests per (section, subject) seeded, published-only filter
-- [ ] Module 5: WhatsApp Integration
+- [x] **Module 2: People & Structure** — full CRUD, bulk import, photo upload
+- [x] **Module 3: Attendance (read-only)** — 4 endpoints, bulk dashboard rollup
+- [x] **Module 4: Tests & Scores (read-only)** — 4 endpoints, ~3 tests per (section, subject) seeded
+- [ ] Module 5: WhatsApp Integration — **on hold**
 - [ ] Module 6: Report Cards
-- [ ] Module 7: Fees
+- [x] **Module 7: Fees** — full CRUD + payments + receipts + dues
 - [ ] Module 8: Analytics
 - [ ] Module 9: Parent Web View
 - [ ] Module 10: Polish
 
-## Module 4 — what shipped
+## Module 7 — what shipped
 
-### Endpoints (4 new, 49 total)
+### Endpoints (13 new, 62 total)
 
-- `GET /tests` — paginated, filters: `sectionId`, `classId`, `subjectId`, `testType`, `from`, `to`. **Published only** (drafts not exposed)
-- `GET /tests/{id}` — test meta + roster + every student's score (or null + is_absent flag) + computed stats (avg, max, min, scored/absent counts)
-- `GET /sections/{id}/tests` — chronological list for one section
-- `GET /students/{id}/scores?from=&to=` — history grouped by subject with per-subject average %
+**Structures**
+- `GET /fee-structures` — list, filter by year/class
+- `POST /fee-structures` — create with nested components
+- `GET /fee-structures/{id}` — detail
+- `POST /fee-structures/{id}/apply` — fan-out to class roster (idempotent)
+
+**Student fees**
+- `GET /students/{id}/fees` — fee detail with components
+- `PATCH /student-fees/{id}/discount` — apply discount with reason
+- `POST /student-fees/{id}/components/{component_id}/toggle` — toggle optional component
+
+**Payments**
+- `GET /payments` — paginated ledger, filterable, optional `includeVoided`
+- `POST /payments` — record with **component-level allocation**, auto receipt #, PDF
+- `GET /payments/{id}` — detail
+- `POST /payments/{id}/void` — soft-void with reason, reverses allocations + status
+
+**Dashboard**
+- `GET /fees/dues` — paginated dues, totals
+- `GET /fees/rollup` — per-section collection summary
 
 ### Data model
 
-- `Test` (TenantScoped): section, subject, name, test_type (FA1–FA4, SA1, SA2, OTHER), test_date, max_marks, created_by, published_at (null = draft)
-- `TestScore` (TenantScoped): test, student, marks_obtained (Decimal 5,2), is_absent, entered_by, entered_at. Unique on `(test, student)`
+- `FeeStructure` (academic_year, class, name) → `FeeComponent[]` (name, amount_paise, due_date, is_optional)
+- `StudentFee` (student, structure, total, discount, final, paid, status) → `StudentFeeComponent[]` (applied_paise, paid_paise, is_applicable, status)
+- `FeePayment` (header: total_paise, mode, paid_on, receipt_number, voided fields) → `FeePaymentComponent[]` (allocation per component)
+- `ReceiptCounter` — per-school, per-academic-year monotonic counter, locked via `select_for_update` inside the payment transaction
+
+**All money fields are `PositiveBigIntegerField` paise.** Never float. A structural test (`test_no_floats_in_money_fields`) asserts this.
+
+### Status state machine
+
+`StudentFee.status` derived from components inside the same transaction that mutates any payment/discount/component toggle:
+
+- **paid**: `paid >= final`
+- **partial**: `paid > 0`, nothing overdue
+- **overdue**: any applicable component past its due date (regardless of partial-payment state)
+- **pending**: nothing paid, nothing overdue yet
+
+Recompute also runs nightly via `recompute_overdue_all` (drift-correction; safe to run any time).
+
+### Receipt PDF
+
+- WeasyPrint template at `apps/fees/receipt_pdf.py` — A5 layout, school branding via `primary_color` from `School`, "VOID" watermark when applicable
+- Uploaded via Django `default_storage` (local in dev, R2 in prod via `USE_R2=True` config flag — no code change)
+- TODO comment: flip `USE_R2=True` and verify the URLs are reachable behind a signed CDN when first prod school onboards
 
 ### Seed
 
-- ~3 published tests per (section, subject) over the last 90 days
-- Mix of FA1, FA2, SA1 (50 / 50 / 100 marks)
-- Per-student ability offset (gaussian, sd 0.08) so subject averages stay realistic across tests
-- ~5% absent rate
-- **Demo numbers**: 450 tests · 12,375 scores
+- One structure per class for the current AY (Class 1: ₹15k total, Class 10: ₹71.5k total — realistic AP State Board ranges)
+- Components: Tuition, Books & Stationery, Lab/Computer/Board Exam (class-appropriate), Transport optional
+- Applied to all 660 students
+- ~60% of students have a payment (mix of full + partial); ~10% completely overdue
+- **Demo numbers**: 10 structures · 660 student fees · 401 payments · ₹2.18 crore expected, ₹94 lakh collected, ₹1.24 crore outstanding
 
-### Tests (11 new, 95 total)
+### Tests (21 new, 116 total)
 
-- Drafts excluded from `GET /tests`
-- Draft `GET /tests/{id}` returns 404
-- Stats math: 40+30+50 mean=40, absent excluded
-- Roster includes unscored students (status=null)
-- Cross-tenant isolation: list, detail, section-tests, student-scores all 404
-- Section-tests filtering scopes correctly
-- Student history: drafts excluded, average % computed
-- Absent excluded from student average
-- Auth required
+- Apply structure: idempotent re-apply, status=pending vs overdue based on due dates, optional component defaults to non-applicable
+- Payment math: full payment → paid; partial → partial; overpay rejected; negative amount rejected
+- Voiding: reverses allocations, recomputes status, second void rejected
+- Receipt numbering: sequential within (school, AY), counter advances
+- Discounts: reduces final, exceeding total rejected, paid-after-discount marks paid
+- Permissions: teacher cannot create structure or record payment
+- Cross-tenant: all 404s on structure / payment / void
+- Dues: only unpaid students; drops out when fully paid
+- **Structural**: every money field is `PositiveBigIntegerField`
 
-### Deferred to teacher-app build
+### Deferred to follow-up (online payments workstream)
 
-- `POST /tests` (create draft)
-- `POST /tests/{id}/scores` (bulk paste-from-Excel)
-- `POST /tests/{id}/publish` (with WhatsApp queue writes for Module 5)
-- `POST /tests/{id}/unpublish` (admin only)
-- Edit window enforcement
+- Razorpay payment links (Tier 1 — ~2 days, blocks on per-school KYC)
+- Razorpay Checkout embed (Tier 2)
+- UPI mandates / subscriptions (Tier 3)
 
-## Module 3 — quick recap
+## Frontend wiring
 
-- `GET /attendance/sections?date=` — single bulk endpoint for dashboard (1 API call, 4 DB queries regardless of section count; 6ms for 24 sections in the demo)
-- `GET /sections/{id}/attendance?date=` — per-section roster + marks
-- `GET /sections/{id}/attendance/summary?from=&to=` — per-student attendance %
-- `GET /students/{id}/attendance?from=&to=` — student history
+All admin fees pages on real API:
 
-### Attendance UI redesign
+- `/admin/fees` — overview with stats tiles + section-wise collection bars
+- `/admin/fees/structures` — list per class/year with totals + applied status
+- `/admin/fees/apply` — pick structure → preview → apply, with idempotent feedback
+- `/admin/fees/record-payment` — student search → fee detail → per-component allocation form with pre-filled remaining amounts
+- `/admin/fees/history` — ledger with search, mode filter, "Show voided" toggle, void dialog with reason
+- `/admin/fees/dues` — dues report with class/status filters, "Record" shortcut per row
+- Student detail **Fees tab** — full fee detail + components + payment history
 
-Replaced the flat-grid-of-cards with a dense list grouped by class, top stats strip (sections marked, not yet marked, absent count), search + filter chips (All / Unmarked / With absences), date picker. Scales to 100+ sections.
+Money helpers in `src/lib/money.ts` (paise ↔ rupees, never float arithmetic for storage).
 
-## Frontend pages on real API
+## Other modules — quick recap
 
-- `/login`, `/signup`
-- `/admin/students` + detail (Profile, Attendance, Marks tabs all live)
-- `/admin/teachers` + detail
-- `/admin/attendance` (redesigned) + section detail
-- `/admin/tests` + detail (matching density-first design as attendance)
+- **Module 1**: auth + tenant infra
+- **Module 2**: full students/teachers CRUD, bulk Excel import, photo upload via `default_storage`
+- **Module 3**: read-only attendance (4 endpoints, bulk roll-up, redesigned dashboard)
+- **Module 4**: read-only tests + scores (4 endpoints, 450 seeded tests with 12k scores)
 
-Auth guard: `beforeLoad` on `/admin` and `/teacher` redirect to `/login?redirect=…` when no token; client-side handler on 401 (with refresh failure) also bounces to login.
-
-## Demo flow
+## Demo flow (~3 minutes)
 
 ```bash
 cd ~/git/skooly && docker compose up -d --build api
@@ -90,25 +125,29 @@ cd ~/git/skooly-stride && bun run dev
 
 Login: `+919876543210` / `demo1234`
 
-End-to-end you can now see:
-1. **Students** → list, add, edit, transfer, withdraw, bulk import, export
-2. **Teachers** → list, add, edit, mark inactive
-3. **Attendance** → dashboard with stats, drill into section/date, student history
-4. **Tests** → 450 tests across sections/subjects, filter by class/subject/type, drill into a test for ranked scores + class average + pass rate
-5. **Student detail** → Profile, Attendance (60-day history with %), Marks (grouped by subject with per-subject avg %)
+1. **Fees overview** → see ₹2.18 cr expected, ₹94 lakh collected, 489 overdue students, section-wise progress bars
+2. **Structures** → 10 structures, one per class
+3. **Apply** → preview Class 6 structure (5 components), can re-apply (idempotent → "0 created, 27 skipped")
+4. **Dues** → 489 students with outstanding fees, filter by class/status
+5. **Record payment** → search student → see remaining per component → submit → toast with receipt #
+6. **History** → see the new receipt at the top → void with reason → row goes opacity-60 and rollup updates
+7. **Student detail → Fees tab** → see the full breakdown + that student's payments
 
 ## Open / pending
 
-- **Uncommitted**: Modules 3 (attendance), 3.5 (UX redesign), auth-redirect fix, Module 4 (this one). 4–5 logical commits worth.
-- **Backend exists, no UI yet**: Classes admin CRUD; photo upload widget.
-- **Stub**: Student-detail Edit form save handler (still toasts).
-- **Phone uniqueness**: globally unique (Django auth requirement). Revisit if teachers need multi-school accounts.
-- **Test naming uniqueness**: no constraint preventing two "FA1 · Unit Test · Math · Class 6-A · 2026-05-01" rows. Probably fine — tests are dated; rename if duplicate is intentional.
+- **Uncommitted**: Module 7 (this one). One backend commit + one frontend commit.
+- **Backlog** (see `docs/backlog.md`):
+  - **P2** Mid-year admission pro-rating
+  - **P3** Revisit receipt number format (per-school customization)
+- **Discount approval workflow**: parked (currently any admin can apply any discount, audit-logged)
+- **Online payment gateway**: separate workstream after Module 6 + Module 5
+- **Module 5 (WhatsApp) on hold**: when it lands, fee reminders + receipt-sent + payment-confirmation templates will use the queue-and-dispatch pattern. Module 7 has no WhatsApp wiring yet.
+- **Receipt PDF in seed**: skipped for volume reasons. PDFs generate on real payment recording; admins can regenerate later via a follow-up endpoint when added.
 
 ## Commands
 
 ```bash
-uv run ruff check .        # clean
-uv run pytest --tb=no -q   # 95 passing
-uv run python manage.py seed_demo --reset  # regenerate everything
+uv run ruff check .         # clean
+uv run pytest --tb=no -q    # 116 passing
+uv run python manage.py seed_demo --reset
 ```
