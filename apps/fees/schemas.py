@@ -87,6 +87,12 @@ class ToggleComponentRequest(CamelSchema):
     is_applicable: bool
 
 
+class ApplyStructureRequest(CamelSchema):
+    """Optional per-section filter. Omit or empty list = apply to all sections."""
+
+    section_ids: list[int] = []
+
+
 class ApplyStructureResponse(CamelSchema):
     created: int
     skipped: int

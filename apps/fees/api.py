@@ -20,6 +20,7 @@ from apps.fees.models import (
     StudentFee,
 )
 from apps.fees.schemas import (
+    ApplyStructureRequest,
     ApplyStructureResponse,
     DiscountRequest,
     DuesListOut,
@@ -205,10 +206,20 @@ def get_structure(request: HttpRequest, structure_id: int) -> dict:
 
 
 @router.post("/fee-structures/{structure_id}/apply", response=ApplyStructureResponse)
-def apply_structure(request: HttpRequest, structure_id: int) -> dict:
+def apply_structure(
+    request: HttpRequest,
+    structure_id: int,
+    payload: ApplyStructureRequest = ApplyStructureRequest(),
+) -> dict:
+    """Body shape: ``{"sectionIds": [1, 2]}`` to apply only to those sections,
+    or ``{}`` / no body to apply to all sections in the structure's class."""
     _require_admin(request)
+    section_ids = payload.section_ids if payload.section_ids else None
     return services.apply_structure_to_class(
-        school=_school(request), actor_id=_user(request).id, structure_id=structure_id
+        school=_school(request),
+        actor_id=_user(request).id,
+        structure_id=structure_id,
+        section_ids=section_ids,
     )
 
 

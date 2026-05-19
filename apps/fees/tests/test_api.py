@@ -67,6 +67,8 @@ def test_create_and_apply_structure(client, admin_token_a, world_a):
     # Apply
     res = client.post(
         f"/api/v1/fee-structures/{structure_id}/apply",
+        data={},
+        content_type="application/json",
         HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
     )
     assert res.status_code == 200, res.content
@@ -77,6 +79,8 @@ def test_create_and_apply_structure(client, admin_token_a, world_a):
     # Re-applying is idempotent — no duplicate StudentFee
     res = client.post(
         f"/api/v1/fee-structures/{structure_id}/apply",
+        data={},
+        content_type="application/json",
         HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
     )
     assert res.json()["created"] == 0
@@ -95,8 +99,12 @@ def test_apply_status_pending_when_due_in_future(client, admin_token_a, world_a)
         "/api/v1/fee-structures", data=payload, content_type="application/json",
         HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
     ).json()["id"]
-    client.post(f"/api/v1/fee-structures/{sid}/apply",
-                HTTP_AUTHORIZATION=f"Bearer {admin_token_a}")
+    client.post(
+        f"/api/v1/fee-structures/{sid}/apply",
+        data={},
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
 
     sf = StudentFee.objects.all_tenants().filter(school=world_a["school"], student=student).first()
     assert sf is not None
@@ -116,11 +124,96 @@ def test_apply_status_overdue_when_past_due(client, admin_token_a, world_a):
         "/api/v1/fee-structures", data=payload, content_type="application/json",
         HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
     ).json()["id"]
-    client.post(f"/api/v1/fee-structures/{sid}/apply",
-                HTTP_AUTHORIZATION=f"Bearer {admin_token_a}")
+    client.post(
+        f"/api/v1/fee-structures/{sid}/apply",
+        data={},
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
 
     sf = StudentFee.objects.all_tenants().filter(school=world_a["school"], student=student).first()
     assert sf.status == FeeStatus.OVERDUE
+
+
+@pytest.mark.django_db
+def test_apply_with_section_filter(client, admin_token_a, world_a):
+    """When sectionIds is provided, only students in those sections get StudentFees."""
+    student_a = StudentFactory(school=world_a["school"], admission_number="SF1")
+    _enroll(world_a, student_a)  # default: section_a
+    # Enroll a second student in section_b
+    student_b = StudentFactory(school=world_a["school"], admission_number="SF2")
+    StudentEnrollment.objects.create(
+        school=world_a["school"],
+        student=student_b,
+        section=world_a["section_b"],
+        academic_year=world_a["year"],
+        roll_number="02",
+        enrollment_date=date(2025, 6, 1),
+        status="active",
+    )
+
+    payload = _make_structure(world_a)
+    sid = client.post(
+        "/api/v1/fee-structures", data=payload, content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    ).json()["id"]
+
+    # Apply only to section_a
+    res = client.post(
+        f"/api/v1/fee-structures/{sid}/apply",
+        data={"sectionIds": [world_a["section_a"].id]},
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 200, res.content
+    body = res.json()
+    assert body["created"] == 1
+    assert body["totalStudents"] == 1  # only section_a's roster
+
+    # student_a gets a fee, student_b does not
+    assert StudentFee.objects.all_tenants().filter(student=student_a).exists()
+    assert not StudentFee.objects.all_tenants().filter(student=student_b).exists()
+
+    # Now apply to both sections — student_a is skipped (idempotent), student_b created
+    res = client.post(
+        f"/api/v1/fee-structures/{sid}/apply",
+        data={"sectionIds": [world_a["section_a"].id, world_a["section_b"].id]},
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    body = res.json()
+    assert body["created"] == 1
+    assert body["skipped"] == 1
+
+
+@pytest.mark.django_db
+def test_apply_rejects_section_from_different_class(client, admin_token_a, world_a):
+    """Section must belong to the structure's class."""
+    # Make a different class with a section
+    from apps.academics.tests.factories import ClassFactory, SectionFactory
+
+    other_class = ClassFactory(
+        school=world_a["school"], academic_year=world_a["year"],
+        name="Class 7", display_order=7,
+    )
+    other_section = SectionFactory(
+        school=world_a["school"], class_obj=other_class, name="A",
+    )
+
+    payload = _make_structure(world_a)  # structure on world_a["class"] (Class 6)
+    sid = client.post(
+        "/api/v1/fee-structures", data=payload, content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    ).json()["id"]
+
+    # Try to apply with a section from a different class
+    res = client.post(
+        f"/api/v1/fee-structures/{sid}/apply",
+        data={"sectionIds": [other_section.id]},
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 404
 
 
 @pytest.mark.django_db
@@ -136,8 +229,12 @@ def test_optional_component_default_not_applicable(client, admin_token_a, world_
         "/api/v1/fee-structures", data=payload, content_type="application/json",
         HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
     ).json()["id"]
-    client.post(f"/api/v1/fee-structures/{sid}/apply",
-                HTTP_AUTHORIZATION=f"Bearer {admin_token_a}")
+    client.post(
+        f"/api/v1/fee-structures/{sid}/apply",
+        data={},
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
 
     sf = StudentFee.objects.all_tenants().filter(school=world_a["school"], student=student).first()
     assert sf.total_paise == 10000_00  # transport excluded
@@ -173,6 +270,8 @@ def _setup_one_student_with_fees(client, token, world):
     ).json()["id"]
     client.post(
         f"/api/v1/fee-structures/{sid}/apply",
+        data={},
+        content_type="application/json",
         HTTP_AUTHORIZATION=f"Bearer {token}",
     )
     fees = client.get(

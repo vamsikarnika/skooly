@@ -130,11 +130,22 @@ def create_structure(
 
 @transaction.atomic
 def apply_structure_to_class(
-    *, school: School, actor_id: int, structure_id: int
+    *,
+    school: School,
+    actor_id: int,
+    structure_id: int,
+    section_ids: list[int] | None = None,
 ) -> dict[str, int]:
     """Idempotent: for every active student in the structure's class who
     doesn't yet have a StudentFee for this structure, create one + components.
-    Existing StudentFees are left alone (no auto-update if components change)."""
+    Existing StudentFees are left alone (no auto-update if components change).
+
+    When ``section_ids`` is provided, only enroll students in those sections.
+    Sections that don't belong to the structure's class are rejected (404).
+    Leaving it None applies to all sections in the class (legacy behaviour).
+    """
+    from apps.academics.models import Section
+
     structure = (
         FeeStructure.objects.filter(school=school, pk=structure_id)
         .select_related("class_obj", "academic_year")
@@ -148,14 +159,28 @@ def apply_structure_to_class(
     if not components:
         raise ValidationFailed("Structure has no components; nothing to apply.")
 
-    enrollments = list(
-        StudentEnrollment.objects.filter(
-            school=school,
-            section__class_obj=structure.class_obj,
-            academic_year=structure.academic_year,
-            status="active",
-        ).select_related("student")
-    )
+    # Validate any provided sections belong to the structure's class.
+    if section_ids:
+        valid_section_ids = set(
+            Section.objects.filter(
+                school=school, class_obj=structure.class_obj, id__in=section_ids
+            ).values_list("id", flat=True)
+        )
+        missing = set(section_ids) - valid_section_ids
+        if missing:
+            raise NotFound(
+                "One or more sections do not belong to this structure's class.",
+            )
+
+    enroll_qs = StudentEnrollment.objects.filter(
+        school=school,
+        section__class_obj=structure.class_obj,
+        academic_year=structure.academic_year,
+        status="active",
+    ).select_related("student")
+    if section_ids:
+        enroll_qs = enroll_qs.filter(section_id__in=section_ids)
+    enrollments = list(enroll_qs)
 
     created = 0
     skipped = 0
