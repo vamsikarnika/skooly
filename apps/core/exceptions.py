@@ -48,6 +48,11 @@ class ValidationFailed(APIError):
     code = "VALIDATION_ERROR"
 
 
+class InvalidOTP(APIError):
+    status_code = 400
+    code = "INVALID_OTP"
+
+
 def _error_response(
     request: HttpRequest,
     api: NinjaAPI,

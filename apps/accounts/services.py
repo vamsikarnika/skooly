@@ -18,13 +18,14 @@ from ninja_jwt.tokens import RefreshToken
 
 from apps.accounts.models import OneTimePassword, PasswordResetToken, Role, User
 from apps.core.context import use_school
-from apps.core.exceptions import Conflict, NotFound, Unauthorized, ValidationFailed
+from apps.core.exceptions import Conflict, InvalidOTP, NotFound, Unauthorized, ValidationFailed
 from apps.schools.models import AcademicYear, Board, School
 
 logger = logging.getLogger(__name__)
 
 OTP_TTL = timedelta(minutes=10)
 RESET_TOKEN_TTL = timedelta(minutes=15)
+TEACHER_OTP_PURPOSE = "teacher_login"
 
 
 def issue_tokens_for_user(user: User) -> dict[str, str]:
@@ -167,6 +168,95 @@ def teacher_login(*, phone: str, password: str) -> tuple[User, dict[str, Any]]:
     }
     token = issue_tokens_for_user(user)["access_token"]
     return user, {"token": token, "teacher": teacher_payload}
+
+
+def find_eligible_teacher(phone: str) -> Any:
+    """A teacher is eligible to sign in if an admin has added their phone as an
+    active Teacher profile. Queried across tenants because this runs pre-auth
+    (no school context yet)."""
+    from apps.people.models import Teacher, TeacherStatus
+
+    normalized = normalize_in_phone(phone)
+    return (
+        Teacher.objects.all_tenants()
+        .filter(phone=normalized, status=TeacherStatus.ACTIVE)
+        .select_related("school")
+        .first()
+    )
+
+
+def send_teacher_otp(phone: str) -> str:
+    """Issue an OTP for teacher activation / password reset. Rejects phones not
+    registered as a teacher (no self-registration). Returns the plain code for
+    the SMS/WhatsApp dispatcher to send."""
+    teacher = find_eligible_teacher(phone)
+    if teacher is None:
+        raise NotFound("No account with that phone number.")
+    normalized = normalize_in_phone(phone)
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    OneTimePassword.objects.create(
+        phone=normalized,
+        code_hash=_hash_otp(code),
+        purpose=TEACHER_OTP_PURPOSE,
+        expires_at=timezone.now() + OTP_TTL,
+    )
+    logger.info("teacher_otp_generated phone=%s teacher_id=%s", normalized, teacher.id)
+    return code
+
+
+def activate_or_reset_teacher(phone: str, otp: str, new_password: str) -> User:
+    """Verify the OTP and set the teacher's password. On first activation this
+    lazily creates the login User and links it to the Teacher profile; on a
+    later call it resets the existing teacher's password.
+
+    OTP validation runs *outside* a transaction so the attempts counter
+    persists on a wrong guess (the lockout must survive the raise). Only the
+    user mutation is wrapped in a transaction.
+    """
+    normalized = normalize_in_phone(phone)
+    record = (
+        OneTimePassword.objects.filter(
+            phone=normalized, purpose=TEACHER_OTP_PURPOSE, consumed_at__isnull=True
+        )
+        .order_by("-created_at")
+        .first()
+    )
+    if record is None or not record.is_valid():
+        raise InvalidOTP("The OTP you entered is incorrect or has expired.")
+    record.attempts += 1
+    if record.code_hash != _hash_otp(otp):
+        record.save(update_fields=["attempts"])
+        raise InvalidOTP("The OTP you entered is incorrect or has expired.")
+    record.consumed_at = timezone.now()
+    record.save(update_fields=["consumed_at", "attempts"])
+
+    teacher = find_eligible_teacher(normalized)
+    if teacher is None:
+        raise NotFound("No account with that phone number.")
+
+    existing = User.objects.filter(phone=normalized).first()
+    if existing is not None and existing.role != Role.TEACHER:
+        raise Conflict("That phone is already in use by another account.")
+
+    with transaction.atomic():
+        if existing is not None:
+            user = existing
+        else:
+            user = User(
+                phone=normalized,
+                role=Role.TEACHER,
+                school=teacher.school,
+                first_name=teacher.first_name,
+                last_name=teacher.last_name,
+                email=teacher.email,
+                is_active=True,
+            )
+        user.set_password(new_password)
+        user.save()
+        if teacher.user_id != user.id:
+            teacher.user = user
+            teacher.save(update_fields=["user"])
+    return user
 
 
 def refresh_tokens(refresh_token: str) -> dict[str, str]:

@@ -29,3 +29,17 @@ class TeacherOut(CamelSchema):
 class TeacherLoginResponse(CamelSchema):
     token: str
     teacher: TeacherOut
+
+
+class TeacherOtpSendRequest(CamelSchema):
+    phone: str = Field(min_length=8, max_length=20)
+
+
+class TeacherOtpVerifyRequest(CamelSchema):
+    phone: str = Field(min_length=8, max_length=20)
+    otp: str = Field(min_length=4, max_length=8)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class TeacherMessageResponse(CamelSchema):
+    message: str
