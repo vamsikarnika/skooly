@@ -168,6 +168,33 @@ def test_attendance_cross_tenant_404(client: Client, world_a, world_b) -> None:
 
 
 @pytest.mark.django_db
+def test_attendance_summary_deduplicates_multi_subject_sections(client: Client, world_a) -> None:
+    """Teacher assigned to same section via two subjects → summary returns one card."""
+    school, year, section = world_a["school"], world_a["year"], world_a["section_a"]
+    teacher = TeacherFactory(school=school, user=world_a["teacher_user"])
+    sub1 = SubjectFactory(school=school, name="Math")
+    sub2 = SubjectFactory(school=school, name="Science")
+    TeacherAssignment.objects.create(
+        school=school, teacher=teacher, subject=sub1, section=section, academic_year=year
+    )
+    TeacherAssignment.objects.create(
+        school=school, teacher=teacher, subject=sub2, section=section, academic_year=year
+    )
+    school.current_academic_year = year
+    school.save(update_fields=["current_academic_year"])
+    today = timezone.now().date().isoformat()
+    res = client.get(
+        f"/api/v1/teacher/attendance/summary?date={today}",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code == 200
+    body = res.json()
+    # Only one card even though there are two assignments to the same section
+    section_ids = [card["sectionId"] for card in body]
+    assert section_ids.count(str(section.id)) == 1
+
+
+@pytest.mark.django_db
 def test_attendance_rejects_admin_token(client: Client, world_a) -> None:
     _setup(world_a)
     today = timezone.now().date().isoformat()
