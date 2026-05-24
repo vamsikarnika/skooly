@@ -23,25 +23,35 @@ def list_teacher_classes(*, teacher: Any, academic_year_id: int | None) -> list[
         .select_related("section__class_obj", "subject")
         .order_by("section__class_obj__display_order", "section__name", "subject__name")
     )
-    cards: list[dict] = []
+
+    # Group by section — a teacher can teach multiple subjects in the same section.
+    seen: dict[int, dict] = {}
     for assignment in assignments:
         section = assignment.section
-        enrollment = StudentEnrollment.objects.filter(section=section, status="active").count()
-        first_mark = (
-            Attendance.objects.filter(section=section, date=today).order_by("marked_at").first()
-        )
-        cards.append(
-            {
-                "id": str(section.id),
+        sid = section.id
+        if sid not in seen:
+            enrollment = StudentEnrollment.objects.filter(section=section, status="active").count()
+            first_mark = (
+                Attendance.objects.filter(section=section, date=today).order_by("marked_at").first()
+            )
+            seen[sid] = {
+                "id": str(sid),
                 "name": section.class_obj.name,
                 "section": section.name,
                 "subject": assignment.subject.name,
+                "_subjects": [assignment.subject.name],
                 "schedule": "",
                 "enrollment": enrollment,
                 "attendance_marked": first_mark is not None,
                 "attendance_time": hhmm_local(first_mark.marked_at) if first_mark else None,
             }
-        )
+        else:
+            seen[sid]["_subjects"].append(assignment.subject.name)
+
+    cards = []
+    for card in seen.values():
+        card["subject"] = " · ".join(card.pop("_subjects"))
+        cards.append(card)
     return cards
 
 
