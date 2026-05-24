@@ -11,19 +11,21 @@ from typing import Any
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.hashers import check_password, make_password
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
 from django.utils import timezone
 from ninja_jwt.tokens import RefreshToken
 
 from apps.accounts.models import OneTimePassword, PasswordResetToken, Role, User
 from apps.core.context import use_school
-from apps.core.exceptions import Conflict, Unauthorized, ValidationFailed
+from apps.core.exceptions import Conflict, InvalidOTP, NotFound, Unauthorized, ValidationFailed
 from apps.schools.models import AcademicYear, Board, School
 
 logger = logging.getLogger(__name__)
 
 OTP_TTL = timedelta(minutes=10)
 RESET_TOKEN_TTL = timedelta(minutes=15)
+TEACHER_OTP_PURPOSE = "teacher_login"
 
 
 def issue_tokens_for_user(user: User) -> dict[str, str]:
@@ -96,6 +98,168 @@ def login(*, phone: str, password: str) -> tuple[User, School | None, dict[str, 
     school = user.school
     tokens = issue_tokens_for_user(user)
     return user, school, tokens
+
+
+def normalize_in_phone(raw: str) -> str:
+    """Accept ``XXXXXXXXXX`` or ``+91XXXXXXXXXX`` (any separators) and return
+    the canonical ``+91XXXXXXXXXX`` form we store on User."""
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    last10 = digits[-10:]
+    return f"+91{last10}"
+
+
+def _format_in_phone(stored: str) -> str:
+    """``+919876543210`` -> ``+91 98765 43210`` for display in the app."""
+    digits = "".join(ch for ch in stored if ch.isdigit())[-10:]
+    if len(digits) != 10:
+        return stored
+    return f"+91 {digits[:5]} {digits[5:]}"
+
+
+def _teacher_primary_subject(teacher: Any, school: School) -> str:
+    """First subject the teacher is assigned to in the school's current year.
+    The login response carries a single subject; teachers may teach several."""
+    from apps.academics.models import TeacherAssignment
+
+    qs = TeacherAssignment.objects.all_tenants().filter(school=school, teacher=teacher)
+    year = school.current_academic_year_id
+    if year is not None:
+        current = qs.filter(academic_year_id=year).select_related("subject").first()
+        if current is not None:
+            return current.subject.name
+    first = qs.select_related("subject").first()
+    return first.subject.name if first is not None else ""
+
+
+def teacher_login(*, phone: str, password: str) -> tuple[User, dict[str, Any]]:
+    """Authenticate a teacher for the skooly-guru app.
+
+    Per the teacher API spec this distinguishes 404 (no account) from 401
+    (wrong password). Non-teacher accounts are treated as not-found so the
+    teacher API never authenticates an admin.
+    """
+    normalized = normalize_in_phone(phone)
+    user = User.objects.filter(phone=normalized, role=Role.TEACHER, is_active=True).first()
+    if user is None:
+        raise NotFound("No account with that phone number.")
+    if not check_user_password(user, password):
+        raise Unauthorized("Incorrect password.")
+
+    user.touch_last_login()
+    school = user.school
+    try:
+        teacher = user.teacher_profile
+    except ObjectDoesNotExist:
+        teacher = None
+
+    name = teacher.full_name if teacher is not None else user.full_name
+    email = (teacher.email if teacher is not None else "") or user.email
+    photo_url = teacher.photo_url if teacher is not None else ""
+    subject = _teacher_primary_subject(teacher, school) if (teacher and school) else ""
+
+    teacher_payload = {
+        "id": str(teacher.id) if teacher is not None else str(user.id),
+        "name": name,
+        "phone": _format_in_phone(user.phone),
+        "email": email,
+        "subject": subject,
+        "school": school.name if school is not None else "",
+        "photo_url": photo_url,
+    }
+    token = issue_tokens_for_user(user)["access_token"]
+    return user, {"token": token, "teacher": teacher_payload}
+
+
+def find_eligible_teacher(phone: str) -> Any:
+    """A teacher is eligible to sign in if an admin has added their phone as an
+    active Teacher profile. Queried across tenants because this runs pre-auth
+    (no school context yet)."""
+    from apps.people.models import Teacher, TeacherStatus
+
+    normalized = normalize_in_phone(phone)
+    return (
+        Teacher.objects.all_tenants()
+        .filter(phone=normalized, status=TeacherStatus.ACTIVE)
+        .select_related("school")
+        .first()
+    )
+
+
+def send_teacher_otp(phone: str) -> str:
+    """Issue an OTP for teacher activation / password reset. Rejects phones not
+    registered as a teacher (no self-registration). Returns the plain code for
+    the SMS/WhatsApp dispatcher to send."""
+    teacher = find_eligible_teacher(phone)
+    if teacher is None:
+        raise NotFound("No account with that phone number.")
+    normalized = normalize_in_phone(phone)
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    OneTimePassword.objects.create(
+        phone=normalized,
+        code_hash=_hash_otp(code),
+        purpose=TEACHER_OTP_PURPOSE,
+        expires_at=timezone.now() + OTP_TTL,
+    )
+    logger.info("teacher_otp_generated phone=%s teacher_id=%s", normalized, teacher.id)
+    if getattr(settings, "WHATSAPP_PROVIDER", "mock") == "mock":
+        # No real OTP delivery until Module 5 — surface the code in dev only.
+        logger.info("teacher_otp_mock_delivery phone=%s code=%s", normalized, code)
+    return code
+
+
+def activate_or_reset_teacher(phone: str, otp: str, new_password: str) -> User:
+    """Verify the OTP and set the teacher's password. On first activation this
+    lazily creates the login User and links it to the Teacher profile; on a
+    later call it resets the existing teacher's password.
+
+    OTP validation runs *outside* a transaction so the attempts counter
+    persists on a wrong guess (the lockout must survive the raise). Only the
+    user mutation is wrapped in a transaction.
+    """
+    normalized = normalize_in_phone(phone)
+    record = (
+        OneTimePassword.objects.filter(
+            phone=normalized, purpose=TEACHER_OTP_PURPOSE, consumed_at__isnull=True
+        )
+        .order_by("-created_at")
+        .first()
+    )
+    if record is None or not record.is_valid():
+        raise InvalidOTP("The OTP you entered is incorrect or has expired.")
+    record.attempts += 1
+    if record.code_hash != _hash_otp(otp):
+        record.save(update_fields=["attempts"])
+        raise InvalidOTP("The OTP you entered is incorrect or has expired.")
+    record.consumed_at = timezone.now()
+    record.save(update_fields=["consumed_at", "attempts"])
+
+    teacher = find_eligible_teacher(normalized)
+    if teacher is None:
+        raise NotFound("No account with that phone number.")
+
+    existing = User.objects.filter(phone=normalized).first()
+    if existing is not None and existing.role != Role.TEACHER:
+        raise Conflict("That phone is already in use by another account.")
+
+    with transaction.atomic():
+        if existing is not None:
+            user = existing
+        else:
+            user = User(
+                phone=normalized,
+                role=Role.TEACHER,
+                school=teacher.school,
+                first_name=teacher.first_name,
+                last_name=teacher.last_name,
+                email=teacher.email,
+                is_active=True,
+            )
+        user.set_password(new_password)
+        user.save()
+        if teacher.user_id != user.id:
+            teacher.user = user
+            teacher.save(update_fields=["user"])
+    return user
 
 
 def refresh_tokens(refresh_token: str) -> dict[str, str]:

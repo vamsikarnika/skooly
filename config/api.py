@@ -4,6 +4,7 @@ from ninja import NinjaAPI
 
 from apps.academics.api import router as academics_router
 from apps.accounts.api import router as accounts_router
+from apps.accounts.teacher_api import router as teacher_accounts_router
 from apps.attendance.api import router as attendance_router
 from apps.core.exceptions import register_exception_handlers
 from apps.exams.api import router as exams_router
@@ -14,7 +15,7 @@ from apps.schools.api import router as schools_router
 api = NinjaAPI(
     title="Skooly API",
     version="1.0.0",
-    description="Skooly — school management platform API.",
+    description="Skooly — school management platform API (admin / skooly-stride).",
     docs_url="/docs",
     openapi_url="/openapi.json",
 )
@@ -28,3 +29,25 @@ api.add_router("/", exams_router)
 api.add_router("/", fees_router)
 
 register_exception_handlers(api)
+
+
+# ---------------------------------------------------------------------------
+# Teacher API (skooly-guru) — mounted at /api/v1/teacher/.
+#
+# A separate NinjaAPI instance so teacher routes never collide with the admin
+# routes above (same paths, different shapes). Every teacher router locks to
+# TeacherJWTAuth, so only teacher tokens can reach it. Routers are registered
+# here as each teacher sub-phase lands.
+# ---------------------------------------------------------------------------
+teacher_api = NinjaAPI(
+    title="Skooly Teacher API",
+    version="teacher-1.0.0",
+    description="Skooly — teacher mobile app (skooly-guru) API.",
+    urls_namespace="teacher",
+    docs_url="/docs",
+    openapi_url="/openapi.json",
+)
+
+teacher_api.add_router("/auth/", teacher_accounts_router)
+
+register_exception_handlers(teacher_api)
