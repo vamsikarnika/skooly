@@ -117,6 +117,6 @@ def register_exception_handlers(api: NinjaAPI) -> None:
             request,
             api,
             code=code_map.get(exc.status_code, "ERROR"),
-            message=str(exc.message),
+            message=str(getattr(exc, "message", exc)),
             status=exc.status_code,
         )
