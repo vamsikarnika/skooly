@@ -201,6 +201,9 @@ def send_teacher_otp(phone: str) -> str:
         expires_at=timezone.now() + OTP_TTL,
     )
     logger.info("teacher_otp_generated phone=%s teacher_id=%s", normalized, teacher.id)
+    if getattr(settings, "WHATSAPP_PROVIDER", "mock") == "mock":
+        # No real OTP delivery until Module 5 — surface the code in dev only.
+        logger.info("teacher_otp_mock_delivery phone=%s code=%s", normalized, code)
     return code
 
 
