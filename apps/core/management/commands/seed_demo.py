@@ -45,6 +45,12 @@ SCHOOL_NAME = "Vidya Bharati High School"
 SCHOOL_PHONE = "+919876543210"
 ADMIN_PASSWORD = "demo1234"
 
+# Login-capable demo teacher for the skooly-guru app (the admin phone above is
+# taken, so the teacher uses a distinct number). Linked to the first seeded
+# teacher profile, which has assignments so a subject resolves.
+TEACHER_PHONE = "+919876500001"
+TEACHER_PASSWORD = "demo1234"
+
 # --- Realistic name pools (AP/Telugu / pan-Indian) -----------------------------
 
 BOY_FIRST_NAMES = [
@@ -167,6 +173,11 @@ class Command(BaseCommand):
 
                 self._seed_assignments(rng, school, year, classes_map, subjects, teachers)
 
+                self._seed_teacher_login(school, teachers)
+                self.stdout.write(self.style.SUCCESS(
+                    f"  ✓ teacher login: {TEACHER_PHONE} / {TEACHER_PASSWORD}"
+                ))
+
                 total_students = 0
                 for cls_name, sections in classes_map.items():
                     for sec in sections:
@@ -248,6 +259,25 @@ class Command(BaseCommand):
             )
             teachers.append(teacher)
         return teachers
+
+    def _seed_teacher_login(self, school: School, teachers: list[Teacher]) -> None:
+        """Create a login-capable User for the first teacher so the skooly-guru
+        app has a real account to authenticate against."""
+        teacher = teachers[0]
+        user, _created = User.objects.get_or_create(
+            phone=TEACHER_PHONE,
+            defaults={
+                "school": school,
+                "role": "teacher",
+                "first_name": teacher.first_name,
+                "last_name": teacher.last_name,
+                "email": teacher.email,
+            },
+        )
+        user.set_password(TEACHER_PASSWORD)
+        user.save()
+        teacher.user = user
+        teacher.save(update_fields=["user"])
 
     def _seed_classes(
         self,
