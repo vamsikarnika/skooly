@@ -7,6 +7,7 @@ from apps.academics.teacher_api import router as teacher_classes_router
 from apps.accounts.api import router as accounts_router
 from apps.accounts.teacher_api import router as teacher_accounts_router
 from apps.attendance.api import router as attendance_router
+from apps.attendance.teacher_api import router as teacher_attendance_router
 from apps.core.exceptions import register_exception_handlers
 from apps.exams.api import router as exams_router
 from apps.fees.api import router as fees_router
@@ -53,5 +54,6 @@ teacher_api = NinjaAPI(
 teacher_api.add_router("/auth/", teacher_accounts_router)
 teacher_api.add_router("/", teacher_classes_router)
 teacher_api.add_router("/", teacher_students_router)
+teacher_api.add_router("/", teacher_attendance_router)
 
 register_exception_handlers(teacher_api)
