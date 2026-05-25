@@ -10,6 +10,7 @@ from apps.attendance.api import router as attendance_router
 from apps.attendance.teacher_api import router as teacher_attendance_router
 from apps.core.exceptions import register_exception_handlers
 from apps.exams.api import router as exams_router
+from apps.exams.teacher_api import router as teacher_tests_router
 from apps.fees.api import router as fees_router
 from apps.people.api import router as people_router
 from apps.people.teacher_api import router as teacher_students_router
@@ -55,5 +56,6 @@ teacher_api.add_router("/auth/", teacher_accounts_router)
 teacher_api.add_router("/", teacher_classes_router)
 teacher_api.add_router("/", teacher_students_router)
 teacher_api.add_router("/", teacher_attendance_router)
+teacher_api.add_router("/", teacher_tests_router)
 
 register_exception_handlers(teacher_api)
