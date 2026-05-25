@@ -14,7 +14,7 @@ Tests cover:
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, timedelta
 
 import pytest
 from django.test import Client
@@ -23,7 +23,7 @@ from django.utils import timezone
 from apps.academics.models import StudentEnrollment, TeacherAssignment
 from apps.academics.tests.factories import SubjectFactory
 from apps.accounts.services import issue_tokens_for_user
-from apps.exams.models import Test, TestScore
+from apps.exams.models import Question, Test, TestScore
 from apps.exams.tests.factories import TestFactory, TestScoreFactory
 from apps.people.tests.factories import StudentFactory, TeacherFactory
 
@@ -465,6 +465,268 @@ def test_cross_tenant_marks_save_404(client: Client, world_a, world_b) -> None:
         f"/api/v1/teacher/tests/{test_b.id}/marks",
         data={"publish": False, "records": []},
         content_type="application/json",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Online test helpers
+# ---------------------------------------------------------------------------
+
+def _make_online_test(
+    world: dict, teacher, section, subject, *, published: bool = False
+) -> Test:
+    from datetime import datetime
+    now = datetime.now(tz=UTC)
+    avail_from = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    avail_until = avail_from.replace(hour=18)
+    t = TestFactory(
+        school=world["school"],
+        section=section,
+        subject=subject,
+        created_by=teacher,
+        test_date=date.today(),
+        max_marks=None,
+        mode="online",
+        available_from=avail_from,
+        available_until=avail_until,
+        duration_min=30,
+        published_at=now if published else None,
+    )
+    return t
+
+
+_MCQ_PAYLOAD = {
+    "questionType": "mcq",
+    "text": "What is 2 + 2?",
+    "marks": 2,
+    "displayOrder": 0,
+    "difficulty": "easy",
+    "topic": "Arithmetic",
+    "options": [
+        {"text": "3", "isCorrect": False, "displayOrder": 0},
+        {"text": "4", "isCorrect": True,  "displayOrder": 1},
+        {"text": "5", "isCorrect": False, "displayOrder": 2},
+        {"text": "6", "isCorrect": False, "displayOrder": 3},
+    ],
+    "correctAnswer": "",
+}
+
+_SHORT_PAYLOAD = {
+    "questionType": "short_answer",
+    "text": "Capital of India?",
+    "marks": 1,
+    "displayOrder": 1,
+    "difficulty": "easy",
+    "topic": "Geography",
+    "options": None,
+    "correctAnswer": "New Delhi",
+}
+
+
+# ---------------------------------------------------------------------------
+# POST /teacher/tests  (online)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_create_online_test(client: Client, world_a) -> None:
+    teacher, subject, section = _setup(world_a)
+    from datetime import datetime
+    now = datetime.now(tz=UTC)
+    res = client.post(
+        "/api/v1/teacher/tests",
+        data={
+            "sectionId": section.id,
+            "name": "Chapter 1 Quiz",
+            "testType": "OTHER",
+            "testDate": date.today().isoformat(),
+            "mode": "online",
+            "availableFrom": now.isoformat(),
+            "availableUntil": now.replace(hour=now.hour + 2).isoformat(),
+            "durationMin": 30,
+        },
+        content_type="application/json",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["mode"] == "online"
+    assert data["maxMarks"] == 0
+    assert data["durationMin"] == 30
+
+
+@pytest.mark.django_db
+def test_create_online_test_missing_schedule(client: Client, world_a) -> None:
+    """Online test without availableFrom/Until → 422."""
+    teacher, subject, section = _setup(world_a)
+    res = client.post(
+        "/api/v1/teacher/tests",
+        data={
+            "sectionId": section.id,
+            "name": "Bad test",
+            "testType": "OTHER",
+            "testDate": date.today().isoformat(),
+            "mode": "online",
+        },
+        content_type="application/json",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code in (400, 422)
+
+
+# ---------------------------------------------------------------------------
+# GET /teacher/tests/{id}/questions
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_get_questions_empty(client: Client, world_a) -> None:
+    teacher, subject, section = _setup(world_a)
+    test = _make_online_test(world_a, teacher, section, subject)
+    res = client.get(
+        f"/api/v1/teacher/tests/{test.id}/questions",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+@pytest.mark.django_db
+def test_get_questions_offline_test_rejected(client: Client, world_a) -> None:
+    teacher, subject, section = _setup(world_a)
+    test = _make_test(world_a, teacher, section, subject)
+    res = client.get(
+        f"/api/v1/teacher/tests/{test.id}/questions",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code == 422  # ValidationFailed
+
+
+# ---------------------------------------------------------------------------
+# POST /teacher/tests/{id}/questions
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_save_questions_draft(client: Client, world_a) -> None:
+    teacher, subject, section = _setup(world_a)
+    test = _make_online_test(world_a, teacher, section, subject)
+    res = client.post(
+        f"/api/v1/teacher/tests/{test.id}/questions",
+        data={"publish": False, "questions": [_MCQ_PAYLOAD, _SHORT_PAYLOAD]},
+        content_type="application/json",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["saved"] == 2
+    assert data["totalMarks"] == 3  # 2 + 1
+    assert data["published"] is False
+    test.refresh_from_db()
+    assert test.max_marks == 3
+    assert test.published_at is None
+    assert Question.objects.all_tenants().filter(test=test).count() == 2
+
+
+@pytest.mark.django_db
+def test_save_questions_publish(client: Client, world_a) -> None:
+    teacher, subject, section = _setup(world_a)
+    test = _make_online_test(world_a, teacher, section, subject)
+    res = client.post(
+        f"/api/v1/teacher/tests/{test.id}/questions",
+        data={"publish": True, "questions": [_MCQ_PAYLOAD]},
+        content_type="application/json",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code == 200
+    assert res.json()["published"] is True
+    test.refresh_from_db()
+    assert test.published_at is not None
+
+
+@pytest.mark.django_db
+def test_save_questions_upsert(client: Client, world_a) -> None:
+    """Saving questions twice replaces the first set."""
+    teacher, subject, section = _setup(world_a)
+    test = _make_online_test(world_a, teacher, section, subject)
+    client.post(
+        f"/api/v1/teacher/tests/{test.id}/questions",
+        data={"publish": False, "questions": [_MCQ_PAYLOAD, _SHORT_PAYLOAD]},
+        content_type="application/json",
+        **_auth(world_a["teacher_user"]),
+    )
+    # Save again with only 1 question
+    res = client.post(
+        f"/api/v1/teacher/tests/{test.id}/questions",
+        data={"publish": False, "questions": [_MCQ_PAYLOAD]},
+        content_type="application/json",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code == 200
+    assert Question.objects.all_tenants().filter(test=test).count() == 1
+
+
+@pytest.mark.django_db
+def test_save_questions_published_blocked(client: Client, world_a) -> None:
+    """Cannot edit questions after publishing."""
+    teacher, subject, section = _setup(world_a)
+    test = _make_online_test(world_a, teacher, section, subject, published=True)
+    res = client.post(
+        f"/api/v1/teacher/tests/{test.id}/questions",
+        data={"publish": False, "questions": [_MCQ_PAYLOAD]},
+        content_type="application/json",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code == 422  # ValidationFailed
+
+
+@pytest.mark.django_db
+def test_save_questions_invalid_mcq_options(client: Client, world_a) -> None:
+    """MCQ with wrong option count → 400."""
+    teacher, subject, section = _setup(world_a)
+    test = _make_online_test(world_a, teacher, section, subject)
+    bad_mcq = {**_MCQ_PAYLOAD, "options": _MCQ_PAYLOAD["options"][:3]}  # only 3
+    res = client.post(
+        f"/api/v1/teacher/tests/{test.id}/questions",
+        data={"publish": False, "questions": [bad_mcq]},
+        content_type="application/json",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code == 422  # ValidationFailed — MCQ requires 4 options
+
+
+@pytest.mark.django_db
+def test_save_questions_roundtrip(client: Client, world_a) -> None:
+    """Save then GET returns same questions."""
+    teacher, subject, section = _setup(world_a)
+    test = _make_online_test(world_a, teacher, section, subject)
+    client.post(
+        f"/api/v1/teacher/tests/{test.id}/questions",
+        data={"publish": False, "questions": [_MCQ_PAYLOAD, _SHORT_PAYLOAD]},
+        content_type="application/json",
+        **_auth(world_a["teacher_user"]),
+    )
+    res = client.get(
+        f"/api/v1/teacher/tests/{test.id}/questions",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code == 200
+    qs = res.json()
+    assert len(qs) == 2
+    mcq = next(q for q in qs if q["questionType"] == "mcq")
+    assert len(mcq["options"]) == 4
+    correct = [o for o in mcq["options"] if o["isCorrect"]]
+    assert len(correct) == 1
+    short = next(q for q in qs if q["questionType"] == "short_answer")
+    assert short["correctAnswer"].lower() == "new delhi"
+
+
+@pytest.mark.django_db
+def test_cross_tenant_questions_404(client: Client, world_a, world_b) -> None:
+    _setup(world_a)
+    teacher_b, subject_b, section_b = _setup(world_b)
+    test_b = _make_online_test(world_b, teacher_b, section_b, subject_b)
+    res = client.get(
+        f"/api/v1/teacher/tests/{test_b.id}/questions",
         **_auth(world_a["teacher_user"]),
     )
     assert res.status_code == 404
