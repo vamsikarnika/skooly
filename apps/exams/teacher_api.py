@@ -10,8 +10,11 @@ from apps.exams import teacher_services
 from apps.exams.teacher_schemas import (
     CreateTestIn,
     MarksRosterItemOut,
+    QuestionOut,
     SaveMarksIn,
     SaveMarksOut,
+    SaveQuestionsIn,
+    SaveQuestionsOut,
     TestOut,
     TestReportOut,
 )
@@ -81,4 +84,28 @@ def get_report(request: HttpRequest, test_id: int) -> dict:
         teacher=get_teacher(request),
         test_id=test_id,
         academic_year_id=school.current_academic_year_id if school else None,
+    )
+
+
+@router.get("/tests/{test_id}/questions", response=list[QuestionOut])
+def get_questions(request: HttpRequest, test_id: int) -> list[dict]:
+    school = request.auth.school  # type: ignore[attr-defined]
+    return teacher_services.get_questions(
+        teacher=get_teacher(request),
+        test_id=test_id,
+        academic_year_id=school.current_academic_year_id if school else None,
+    )
+
+
+@router.post("/tests/{test_id}/questions", response=SaveQuestionsOut)
+def save_questions(
+    request: HttpRequest, test_id: int, payload: SaveQuestionsIn
+) -> dict:
+    school = request.auth.school  # type: ignore[attr-defined]
+    return teacher_services.save_questions(
+        teacher=get_teacher(request),
+        test_id=test_id,
+        academic_year_id=school.current_academic_year_id if school else None,
+        questions=[q.model_dump(by_alias=False) for q in payload.questions],
+        publish=payload.publish,
     )
