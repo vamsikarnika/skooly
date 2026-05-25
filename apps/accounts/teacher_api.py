@@ -36,3 +36,14 @@ def otp_send(request: HttpRequest, payload: TeacherOtpSendRequest) -> dict:
 def otp_verify(request: HttpRequest, payload: TeacherOtpVerifyRequest) -> dict:
     services.activate_or_reset_teacher(payload.phone, payload.otp, payload.new_password)
     return {"message": "Password reset successful"}
+
+
+@router.post("/refresh", response=TeacherLoginResponse)
+def refresh(request: HttpRequest) -> dict:
+    """Re-issue a fresh access token for the currently authenticated teacher.
+
+    The client should call this on every app open so the teacher stays logged in
+    without re-entering credentials. The existing token must still be valid at
+    the time of the call (i.e., not yet expired).
+    """
+    return services.teacher_refresh(user=request.auth)  # type: ignore[attr-defined]

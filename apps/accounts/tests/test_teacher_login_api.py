@@ -135,3 +135,42 @@ def test_primary_subject_falls_back_when_no_current_year(world_a) -> None:
 
 def test_format_phone_passthrough_when_not_ten_digits() -> None:
     assert services._format_in_phone("+9112345") == "+9112345"
+
+
+REFRESH_URL = "/api/v1/teacher/auth/refresh"
+
+
+def _auth_header(client: Client, phone: str, password: str) -> dict:  # type: ignore[no-untyped-def]
+    res = _post(client, phone, password)
+    assert res.status_code == 200
+    return {"HTTP_AUTHORIZATION": f"Bearer {res.json()['token']}"}
+
+
+@pytest.mark.django_db
+def test_refresh_returns_new_token(client, world_a) -> None:
+    _setup_teacher(world_a)
+    headers = _auth_header(client, "+911111111102", "testpass123")
+    res = client.post(REFRESH_URL, content_type="application/json", **headers)
+    assert res.status_code == 200, res.content
+    body = res.json()
+    assert body["token"]
+    assert body["teacher"]["name"] == "Priya Sharma"
+
+
+@pytest.mark.django_db
+def test_refresh_without_token_is_401(client) -> None:
+    res = client.post(REFRESH_URL, content_type="application/json")
+    assert res.status_code == 401
+
+
+@pytest.mark.django_db
+def test_refresh_admin_token_rejected(client, world_a) -> None:
+    """Admin tokens must not work on the teacher refresh endpoint."""
+    from apps.accounts.services import issue_tokens_for_user
+    token = issue_tokens_for_user(world_a["admin"])["access_token"]
+    res = client.post(
+        REFRESH_URL,
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    assert res.status_code == 401

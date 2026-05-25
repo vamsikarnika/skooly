@@ -107,8 +107,13 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # JWT
 NINJA_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=config("JWT_ACCESS_TTL_MINUTES", default=15, cast=int)),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=config("JWT_REFRESH_TTL_DAYS", default=7, cast=int)),
+    # Default of 11 520 min = 8 days so the teacher mobile app stays logged in
+    # across the weekend without requiring a password re-entry.  The teacher's
+    # app calls POST /auth/refresh on every foreground-resume to extend the
+    # window proactively; the 5-day-inactivity logout lives in the frontend.
+    # Override with JWT_ACCESS_TTL_MINUTES in .env for tighter security in prod.
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=config("JWT_ACCESS_TTL_MINUTES", default=11520, cast=int)),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=config("JWT_REFRESH_TTL_DAYS", default=10, cast=int)),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": False,
     "SIGNING_KEY": config("JWT_SECRET", default=SECRET_KEY),

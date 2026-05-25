@@ -170,6 +170,40 @@ def teacher_login(*, phone: str, password: str) -> tuple[User, dict[str, Any]]:
     return user, {"token": token, "teacher": teacher_payload}
 
 
+def teacher_refresh(*, user: Any) -> dict[str, Any]:
+    """Re-issue a fresh access token for an already-authenticated teacher.
+
+    Called from the ``/auth/refresh`` endpoint which is already protected by
+    :data:`teacher_jwt_auth`.  The caller's existing token must still be valid;
+    this function simply mints a new one with a fresh expiry so the teacher
+    stays logged in without having to re-enter their password.
+    """
+    from django.core.exceptions import ObjectDoesNotExist
+
+    school = user.school
+    try:
+        teacher = user.teacher_profile
+    except ObjectDoesNotExist:
+        teacher = None
+
+    name = teacher.full_name if teacher is not None else user.full_name
+    email = (teacher.email if teacher is not None else "") or user.email
+    photo_url = teacher.photo_url if teacher is not None else ""
+    subject = _teacher_primary_subject(teacher, school) if (teacher and school) else ""
+
+    teacher_payload = {
+        "id": str(teacher.id) if teacher is not None else str(user.id),
+        "name": name,
+        "phone": _format_in_phone(user.phone),
+        "email": email,
+        "subject": subject,
+        "school": school.name if school is not None else "",
+        "photo_url": photo_url,
+    }
+    token = issue_tokens_for_user(user)["access_token"]
+    return {"token": token, "teacher": teacher_payload}
+
+
 def find_eligible_teacher(phone: str) -> Any:
     """A teacher is eligible to sign in if an admin has added their phone as an
     active Teacher profile. Queried across tenants because this runs pre-auth
