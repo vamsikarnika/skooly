@@ -721,6 +721,90 @@ def test_save_questions_roundtrip(client: Client, world_a) -> None:
 
 
 @pytest.mark.django_db
+def test_save_questions_no_difficulty(client: Client, world_a) -> None:
+    """Questions without difficulty (omitted or null) must not 500.
+
+    Regression: service used ``q.get("difficulty") or None`` which set
+    difficulty=None and hit the NOT NULL DB constraint.  Fixed to ``or ""``.
+    """
+    teacher, subject, section = _setup(world_a)
+    test = _make_online_test(world_a, teacher, section, subject)
+
+    no_diff_mcq = {
+        "questionType": "mcq",
+        "text": "No difficulty MCQ?",
+        "marks": 1,
+        "displayOrder": 0,
+        "topic": "",
+        # difficulty intentionally omitted
+        "options": [
+            {"text": "A", "isCorrect": True,  "displayOrder": 0},
+            {"text": "B", "isCorrect": False, "displayOrder": 1},
+            {"text": "C", "isCorrect": False, "displayOrder": 2},
+            {"text": "D", "isCorrect": False, "displayOrder": 3},
+        ],
+        "correctAnswer": "",
+    }
+    no_diff_short = {
+        "questionType": "short_answer",
+        "text": "Fill in the blank?",
+        "marks": 1,
+        "displayOrder": 1,
+        "difficulty": None,   # explicitly null
+        "topic": "",
+        "options": None,
+        "correctAnswer": "answer",
+    }
+
+    res = client.post(
+        f"/api/v1/teacher/tests/{test.id}/questions",
+        data={"publish": False, "questions": [no_diff_mcq, no_diff_short]},
+        content_type="application/json",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["saved"] == 2
+    # Verify difficulty stored as empty string, not None
+    qs = Question.objects.all_tenants().filter(test=test)
+    assert all(q.difficulty == "" for q in qs)
+
+
+@pytest.mark.django_db
+def test_get_test_detail_online_has_mode(client: Client, world_a) -> None:
+    """GET /teacher/tests/{id} for an online test must return mode='online'
+    so the frontend can route to the question builder instead of marks entry."""
+    teacher, subject, section = _setup(world_a)
+    test = _make_online_test(world_a, teacher, section, subject)
+    res = client.get(
+        f"/api/v1/teacher/tests/{test.id}",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["mode"] == "online"
+    assert data["status"] == "draft"
+    assert data["availableFrom"] is not None
+    assert data["availableUntil"] is not None
+
+
+@pytest.mark.django_db
+def test_get_test_detail_offline_has_mode(client: Client, world_a) -> None:
+    """GET /teacher/tests/{id} for an offline test must return mode='offline'."""
+    teacher, subject, section = _setup(world_a)
+    test = _make_test(world_a, teacher, section, subject)
+    res = client.get(
+        f"/api/v1/teacher/tests/{test.id}",
+        **_auth(world_a["teacher_user"]),
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["mode"] == "offline"
+    assert data["availableFrom"] is None
+    assert data["availableUntil"] is None
+
+
+@pytest.mark.django_db
 def test_cross_tenant_questions_404(client: Client, world_a, world_b) -> None:
     _setup(world_a)
     teacher_b, subject_b, section_b = _setup(world_b)

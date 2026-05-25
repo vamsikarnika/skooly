@@ -333,7 +333,7 @@ def save_questions(
                 text=q["text"].strip(),
                 marks=int(q.get("marks", 1)),
                 display_order=i,
-                difficulty=q.get("difficulty") or None,
+                difficulty=q.get("difficulty") or "",
                 topic=q.get("topic", "").strip(),
                 correct_answer=q.get("correct_answer", "").strip(),
             )
