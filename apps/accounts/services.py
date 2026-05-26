@@ -204,6 +204,61 @@ def teacher_refresh(*, user: Any) -> dict[str, Any]:
     return {"token": token, "teacher": teacher_payload}
 
 
+def update_teacher_profile(*, user: Any, name: str, email: str) -> dict[str, Any]:
+    """Update the teacher's display name and email.
+
+    ``name`` is treated as a full name and split into first/last on the first
+    space so the Teacher model's separate columns stay consistent.
+    Phone is deliberately not updatable here — it is the login credential and
+    can only be changed by a school admin.
+    """
+    from django.core.exceptions import ObjectDoesNotExist
+
+    name = name.strip()
+    email = email.strip()
+
+    try:
+        teacher = user.teacher_profile
+    except ObjectDoesNotExist:
+        raise NotFound("No teacher profile linked to this account.")
+
+    parts = name.split(" ", 1)
+    teacher.first_name = parts[0]
+    teacher.last_name = parts[1] if len(parts) > 1 else ""
+    teacher.email = email
+    teacher.save(update_fields=["first_name", "last_name", "email", "updated_at"])
+
+    # Keep User.email in sync so admin views are consistent.
+    if user.email != email:
+        user.email = email
+        user.save(update_fields=["email"])
+
+    school = user.school
+    subject = _teacher_primary_subject(teacher, school) if school else ""
+    return {
+        "id": str(teacher.id),
+        "name": teacher.full_name,
+        "phone": _format_in_phone(user.phone),
+        "email": teacher.email,
+        "subject": subject,
+        "school": school.name if school else "",
+        "photo_url": teacher.photo_url,
+    }
+
+
+def change_teacher_password(*, user: Any, current_password: str, new_password: str) -> None:
+    """Verify the current password then set the new one.
+
+    Raises :exc:`~apps.core.exceptions.Unauthorized` when the current password
+    is wrong so the caller gets a 401 (not a 422 — the credentials are the
+    problem, not the payload shape).
+    """
+    if not check_user_password(user, current_password):
+        raise Unauthorized("Current password is incorrect.")
+    user.set_password(new_password)
+    user.save(update_fields=["password"])
+
+
 def find_eligible_teacher(phone: str) -> Any:
     """A teacher is eligible to sign in if an admin has added their phone as an
     active Teacher profile. Queried across tenants because this runs pre-auth

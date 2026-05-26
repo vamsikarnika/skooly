@@ -5,6 +5,7 @@ from ninja import NinjaAPI
 from apps.academics.api import router as academics_router
 from apps.academics.teacher_api import router as teacher_classes_router
 from apps.accounts.api import router as accounts_router
+from apps.accounts.teacher_api import profile_router as teacher_profile_router
 from apps.accounts.teacher_api import router as teacher_accounts_router
 from apps.attendance.api import router as attendance_router
 from apps.attendance.teacher_api import router as teacher_attendance_router
@@ -53,6 +54,7 @@ teacher_api = NinjaAPI(
 )
 
 teacher_api.add_router("/auth/", teacher_accounts_router)
+teacher_api.add_router("/", teacher_profile_router)
 teacher_api.add_router("/", teacher_classes_router)
 teacher_api.add_router("/", teacher_students_router)
 teacher_api.add_router("/", teacher_attendance_router)
