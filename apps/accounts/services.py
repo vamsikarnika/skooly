@@ -219,8 +219,8 @@ def update_teacher_profile(*, user: Any, name: str, email: str) -> dict[str, Any
 
     try:
         teacher = user.teacher_profile
-    except ObjectDoesNotExist:
-        raise NotFound("No teacher profile linked to this account.")
+    except ObjectDoesNotExist as exc:
+        raise NotFound("No teacher profile linked to this account.") from exc
 
     parts = name.split(" ", 1)
     teacher.first_name = parts[0]
