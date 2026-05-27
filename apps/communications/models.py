@@ -30,6 +30,10 @@ class Notification(TenantScopedModel):
     body = models.CharField(max_length=500, blank=True)
     link_to = models.CharField(max_length=120, blank=True)
     is_read = models.BooleanField(default=False, db_index=True)
+    # Optional. When set, the notification is hidden from the parent once it
+    # passes (e.g. a "present today" notice expires at end of day so it doesn't
+    # pile up). Null = never expires (default behaviour).
+    expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
         db_table = "notifications"

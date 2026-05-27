@@ -9,7 +9,9 @@ from __future__ import annotations
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
+from django.db.models import Q
 from django.http import HttpRequest
+from django.utils import timezone
 from ninja import Router
 
 from apps.accounts.parent_auth import get_parent, get_parent_child, parent_jwt_auth
@@ -53,7 +55,10 @@ def _serialize(n: Notification) -> dict:
 @router.get("/children/{child_id}/notifications", response=NotificationListOut)
 def list_notifications(request: HttpRequest, child_id: int) -> dict:
     student = get_parent_child(request, child_id)
-    qs = Notification.objects.filter(student=student)
+    # Hide notifications past their expiry; null expiry never expires.
+    qs = Notification.objects.filter(student=student).filter(
+        Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())
+    )
     unread_count = qs.filter(is_read=False).count()
     # Model ordering already puts unread first, then newest.
     rows = list(qs[:50])

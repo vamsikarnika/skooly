@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from django.test import Client
+from django.utils import timezone
 
 from apps.academics.models import StudentEnrollment
 from apps.accounts.models import Role, User
@@ -84,6 +85,29 @@ def test_mark_all_read(client: Client, world_a) -> None:
     )
     assert res.status_code == 200, res.content
     assert Notification.objects.filter(student=student, is_read=False).count() == 0
+
+
+@pytest.mark.django_db
+def test_expired_notifications_are_hidden(client: Client, world_a) -> None:
+    user, student = _parent_with_child(world_a)
+    school = world_a["school"]
+    now = timezone.now()
+    # Visible: never-expires + future expiry. Hidden: past expiry.
+    _notif(school, student, title="no expiry", is_read=False)
+    future = _notif(school, student, title="future", is_read=False)
+    future.expires_at = now + timedelta(hours=1)
+    future.save(update_fields=["expires_at"])
+    expired = _notif(school, student, title="expired", is_read=False)
+    expired.expires_at = now - timedelta(minutes=1)
+    expired.save(update_fields=["expires_at"])
+
+    res = client.get(f"/api/v1/parent/children/{student.id}/notifications", **_auth(user))
+    assert res.status_code == 200, res.content
+    body = res.json()
+    titles = {n["title"] for n in body["notifications"]}
+    assert titles == {"no expiry", "future"}
+    # Expired one is excluded from the unread count too.
+    assert body["unreadCount"] == 2
 
 
 @pytest.mark.django_db
