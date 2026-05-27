@@ -51,6 +51,11 @@ ADMIN_PASSWORD = "demo1234"
 TEACHER_PHONE = "+919876500001"
 TEACHER_PASSWORD = "demo1234"
 
+# Login-capable demo parent for the skooly-parent app. OTP-only (no password).
+# Linked to two real seeded students, renamed so the demo reads naturally.
+PARENT_PHONE = "+919876512345"
+PARENT_NAME = "Suresh Reddy"
+
 # --- Realistic name pools (AP/Telugu / pan-Indian) -----------------------------
 
 BOY_FIRST_NAMES = [
@@ -205,9 +210,61 @@ class Command(BaseCommand):
                     f"{fee_stats['payments']:,} payments"
                 ))
 
+                children = self._seed_parent(school, classes_map)
+                self.stdout.write(self.style.SUCCESS(
+                    f"  ✓ parent login: {PARENT_PHONE} (OTP) → "
+                    f"{', '.join(c.full_name for c in children)}"
+                ))
+
         self.stdout.write(self.style.SUCCESS("Demo seed complete."))
 
     # --- Helpers ----------------------------------------------------------------
+
+    def _seed_parent(
+        self, school: School, classes_map: dict[str, list[Section]]
+    ) -> list[Student]:
+        """Create the demo parent (Suresh Reddy) and link two real students,
+        renamed Aarav/Ananya Reddy so the parent-app demo reads naturally."""
+        from apps.people.models import Parent, ParentStudent
+
+        def adopt(cls_name: str, first_name: str) -> Student | None:
+            for sec in classes_map.get(cls_name, []):
+                enr = (
+                    StudentEnrollment.objects.filter(section=sec, status="active")
+                    .select_related("student")
+                    .order_by("id")
+                    .first()
+                )
+                if enr is None:
+                    continue
+                st = enr.student
+                st.first_name = first_name
+                st.last_name = "Reddy"
+                st.parent1_name = PARENT_NAME
+                st.parent1_phone = PARENT_PHONE
+                st.parent1_relation = Relation.FATHER
+                st.parent1_whatsapp = True
+                st.primary_whatsapp_phone = PARENT_PHONE
+                st.save(update_fields=[
+                    "first_name", "last_name", "parent1_name", "parent1_phone",
+                    "parent1_relation", "parent1_whatsapp", "primary_whatsapp_phone",
+                    "updated_at",
+                ])
+                return st
+            return None
+
+        children = [c for c in (adopt("Class 8", "Aarav"), adopt("Class 5", "Ananya")) if c]
+        parent = Parent.objects.create(
+            school=school,
+            name=PARENT_NAME,
+            phone=PARENT_PHONE,
+            email="suresh.reddy@example.com",
+        )
+        for child in children:
+            ParentStudent.objects.create(
+                school=school, parent=parent, student=child, relation=Relation.FATHER
+            )
+        return children
 
     def _seed_school(self) -> tuple[School, User, dict]:
         from apps.accounts import services as auth_services

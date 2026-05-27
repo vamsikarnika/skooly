@@ -48,3 +48,6 @@ htmlcov/
 
 # Docs build artifacts
 docs/openapi.json
+
+# Local agent config
+.claude/

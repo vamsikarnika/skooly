@@ -15,8 +15,39 @@
 - [ ] Module 6: Report Cards
 - [x] **Module 7: Fees** — full CRUD + payments + receipts + dues
 - [ ] Module 8: Analytics
-- [ ] Module 9: Parent Web View
+- [~] **Module 9: Parent App (skooly-parent)** — Phase 1 shipped (auth + feed/attendance/marks/fees); Phase 2 pending
 - [ ] Module 10: Polish
+
+## Module 9 — Parent App (skooly-parent), Phase 1
+
+Third NinjaAPI instance mounted at `/api/v1/parent/` (mirrors the teacher pattern), locked to `ParentJWTAuth`. Replaced the parent app's mock data with real endpoints.
+
+### Parent identity
+- New `Role.PARENT`; `people.Parent` (OneToOne `User`, OTP-only login, no password) + `people.ParentStudent` link (M2M with relation). `ParentJWTAuth` rejects non-parent tokens; `get_parent_child(child_id)` resolves a linked `Student` or **404** (never 403 — no existence leak).
+- Lazy User creation on first OTP verify (like teacher activation).
+
+### Endpoints (11)
+- `POST /auth/send-otp`, `POST /auth/verify-otp` (→ token + parent + children bootstrap), `POST /auth/refresh`, `POST /auth/logout`
+- `GET /parent/me`
+- `GET /children/{id}/feed` — aggregates recent attendance + published marks + overdue fees
+- `GET /children/{id}/attendance?year=&month=` (calendar) · `…/attendance/yearly` (trend)
+- `GET /children/{id}/tests` · `…/tests/{testId}` — published **offline** tests with class avg/high/rank computed on the fly
+- `GET /children/{id}/fees` — components + payment history, **amounts in whole rupees** (parent app has no paise)
+
+### Seed
+- Demo parent **Suresh Reddy** `+919876512345` (OTP only), linked to two real students renamed **Aarav Reddy** (Class 8-A) and **Ananya Reddy** (Class 5-A).
+
+### Tests (9 new)
+- OTP send/verify, bootstrap payload, role lock (teacher token → 401), cross-tenant child → 404, unlinked-same-school child → 404, monthly attendance, marks list with rank. Full suite green.
+
+### Frontend wiring (skooly-parent, `feat/wire-backend-api`)
+- New `src/lib/api.ts` typed fetch wrapper (mirrors guru), base `…/api/v1/parent`, 401 → `skooly:unauthorized`.
+- Real OTP auth in `src/lib/auth.tsx`; wired **login → otp → select-child → home**, plus **attendance, marks (+detail), fees**, and the home feed/stat tiles. Verified end-to-end in browser.
+- **Phase 2 (still mocked):** notifications, timetable, online tests, announcements, report cards, FCM device token, parent profile edit. Home's notification badge + timetable strip read mock and render empty for real children (noted in code).
+
+### Notes / follow-ups
+- Dev CORS now allows `http://localhost:3001` (parent Vite port) in `docker-compose.yml`.
+- Pre-existing `seed_demo --reset` `ProtectedError` on a populated DB (PROTECT FKs on School) — flagged as a separate task; fresh-volume seed works.
 
 ## Module 7 — what shipped
 
