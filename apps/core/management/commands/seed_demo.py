@@ -29,6 +29,7 @@ from apps.academics.models import (
 )
 from apps.accounts.models import User
 from apps.attendance.models import Attendance, AttendanceStatus
+from apps.communications.models import Notification, NotificationType
 from apps.core.context import use_school
 from apps.exams.models import Test, TestScore, TestType
 from apps.fees import services as fees_services
@@ -264,7 +265,31 @@ class Command(BaseCommand):
             ParentStudent.objects.create(
                 school=school, parent=parent, student=child, relation=Relation.FATHER
             )
+            self._seed_notifications(school, child)
         return children
+
+    @staticmethod
+    def _seed_notifications(school: School, child: Student) -> None:
+        fn = child.first_name
+        rows = [
+            (NotificationType.ATTENDANCE, f"{fn} is in school",
+             "Marked present this morning.", "/attendance", False),
+            (NotificationType.FEE, "Fee overdue: Transport",
+             "Transport Fee was due. Please clear at the school office.", "/fees", False),
+            (NotificationType.TEST, "New online test assigned",
+             "A practice quiz is now available.", "/more/online-tests", True),
+            (NotificationType.MARKS, "Test results published",
+             f"{fn}'s latest test marks are out.", "/marks", True),
+            (NotificationType.ANNOUNCEMENT, "Parent-Teacher Meeting",
+             "Scheduled this Saturday, 10 AM to 1 PM.", "/more/announcements", True),
+        ]
+        Notification.objects.bulk_create([
+            Notification(
+                school=school, student=child, type=t, title=title, body=body,
+                link_to=link, is_read=is_read,
+            )
+            for (t, title, body, link, is_read) in rows
+        ])
 
     def _seed_school(self) -> tuple[School, User, dict]:
         from apps.accounts import services as auth_services
