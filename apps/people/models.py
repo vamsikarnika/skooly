@@ -114,3 +114,54 @@ class Teacher(TenantScopedModel):
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}".strip()
+
+
+class Parent(TenantScopedModel):
+    """A parent/guardian who logs into the skooly-parent mobile app via OTP.
+
+    Identity mirrors Teacher: a login ``User`` (role=parent) plus a profile row.
+    The phone is the login credential; children are linked via ``ParentStudent``.
+    """
+
+    user = models.OneToOneField(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="parent_profile",
+    )
+    name = models.CharField(max_length=200)
+    phone = models.CharField(max_length=20)
+    email = models.EmailField(blank=True)
+    students = models.ManyToManyField(
+        Student,
+        through="people.ParentStudent",
+        related_name="parents",
+    )
+
+    class Meta:
+        db_table = "parents"
+        indexes = [
+            models.Index(fields=["school", "phone"]),
+        ]
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.phone})".strip()
+
+
+class ParentStudent(TenantScopedModel):
+    """Links a Parent to one of their children, with the relationship label."""
+
+    parent = models.ForeignKey(Parent, on_delete=models.CASCADE, related_name="links")
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="parent_links")
+    relation = models.CharField(max_length=20, choices=Relation.choices, blank=True)
+
+    class Meta:
+        db_table = "parent_students"
+        constraints = [
+            models.UniqueConstraint(fields=["parent", "student"], name="uniq_parent_student"),
+        ]
+        indexes = [
+            models.Index(fields=["student"]),
+        ]

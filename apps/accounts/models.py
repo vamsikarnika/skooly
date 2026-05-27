@@ -18,6 +18,7 @@ from django.utils import timezone
 class Role(models.TextChoices):
     ADMIN = "admin", "School Admin"
     TEACHER = "teacher", "Teacher"
+    PARENT = "parent", "Parent"
 
 
 class UserManager(BaseUserManager):
