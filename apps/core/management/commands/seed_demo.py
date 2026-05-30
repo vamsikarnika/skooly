@@ -29,6 +29,7 @@ from apps.academics.models import (
 )
 from apps.accounts.models import User
 from apps.attendance.models import Attendance, AttendanceStatus
+from apps.communications.models import Notification, NotificationType
 from apps.core.context import use_school
 from apps.exams.models import Test, TestScore, TestType
 from apps.fees import services as fees_services
@@ -264,7 +265,34 @@ class Command(BaseCommand):
             ParentStudent.objects.create(
                 school=school, parent=parent, student=child, relation=Relation.FATHER
             )
+            self._seed_notifications(school, child)
         return children
+
+    @staticmethod
+    def _seed_notifications(school: School, child: Student) -> None:
+        fn = child.first_name
+        # Today's attendance notice expires end of day so it doesn't accumulate
+        # day over day — the parent only ever sees the current status.
+        eod = timezone.now().replace(hour=23, minute=59, second=59, microsecond=0)
+        rows = [
+            (NotificationType.ATTENDANCE, f"{fn} is in school",
+             "Marked present this morning.", "/attendance", False, eod),
+            (NotificationType.FEE, "Fee overdue: Transport",
+             "Transport Fee was due. Please clear at the school office.", "/fees", False, None),
+            (NotificationType.TEST, "New online test assigned",
+             "A practice quiz is now available.", "/more/online-tests", True, None),
+            (NotificationType.MARKS, "Test results published",
+             f"{fn}'s latest test marks are out.", "/marks", True, None),
+            (NotificationType.ANNOUNCEMENT, "Parent-Teacher Meeting",
+             "Scheduled this Saturday, 10 AM to 1 PM.", "/more/announcements", True, None),
+        ]
+        Notification.objects.bulk_create([
+            Notification(
+                school=school, student=child, type=t, title=title, body=body,
+                link_to=link, is_read=is_read, expires_at=expires_at,
+            )
+            for (t, title, body, link, is_read, expires_at) in rows
+        ])
 
     def _seed_school(self) -> tuple[School, User, dict]:
         from apps.accounts import services as auth_services

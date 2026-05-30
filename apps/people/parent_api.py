@@ -54,8 +54,9 @@ def feed(request: HttpRequest, child_id: int) -> dict:
     name = student.first_name
     items: list[dict] = []
 
-    # Attendance — the few most recent recorded days.
-    for a in Attendance.objects.filter(student=student).order_by("-date")[:3]:
+    # Attendance — only the latest recorded day (current status; avoids a noisy
+    # run of "was present / was absent" entries piling up in the feed).
+    for a in Attendance.objects.filter(student=student).order_by("-date")[:1]:
         items.append(
             {
                 "id": f"att-{a.id}",
