@@ -55,3 +55,12 @@ class RefreshResponse(CamelSchema):
 
 class SuccessResponse(CamelSchema):
     success: bool
+
+
+class UpdateProfileRequest(CamelSchema):
+    """Editable parent profile fields. Phone is deliberately not here — it's
+    the login credential and can only be changed by a school admin. Either
+    field may be omitted (None) to leave it unchanged; ``email=""`` clears it."""
+
+    name: str | None = None
+    email: str | None = None

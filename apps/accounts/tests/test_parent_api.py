@@ -352,6 +352,95 @@ def test_refresh_reissues_token(client: Client, world_a) -> None:
     assert res.json()["token"]
 
 
+# --- Profile edit ----------------------------------------------------------
+
+@pytest.mark.django_db
+def test_update_profile_changes_name_and_email(client: Client, world_a) -> None:
+    parent, user, _student = _make_parent(world_a, PHONE_A)
+    res = client.patch(
+        "/api/v1/parent/parent/me",
+        data={"name": "Suresh K Reddy", "email": "new@x.com"},
+        content_type="application/json",
+        **_auth(user),
+    )
+    assert res.status_code == 200, res.content
+    body = res.json()
+    assert body["name"] == "Suresh K Reddy"
+    assert body["email"] == "new@x.com"
+    parent.refresh_from_db()
+    user.refresh_from_db()
+    assert parent.name == "Suresh K Reddy"
+    assert parent.email == "new@x.com"
+    # The linked User is kept in sync so admin views are consistent.
+    assert user.first_name == "Suresh"
+    assert user.last_name == "K Reddy"
+    assert user.email == "new@x.com"
+
+
+@pytest.mark.django_db
+def test_update_profile_only_name_leaves_email_unchanged(client: Client, world_a) -> None:
+    parent, user, _ = _make_parent(world_a, PHONE_A)
+    parent.email = "keep@x.com"
+    parent.save(update_fields=["email"])
+    res = client.patch(
+        "/api/v1/parent/parent/me",
+        data={"name": "New Name"},
+        content_type="application/json",
+        **_auth(user),
+    )
+    assert res.status_code == 200, res.content
+    assert res.json()["email"] == "keep@x.com"
+
+
+@pytest.mark.django_db
+def test_update_profile_clear_email_with_empty_string(client: Client, world_a) -> None:
+    parent, user, _ = _make_parent(world_a, PHONE_A)
+    parent.email = "drop@x.com"
+    parent.save(update_fields=["email"])
+    res = client.patch(
+        "/api/v1/parent/parent/me",
+        data={"email": ""},
+        content_type="application/json",
+        **_auth(user),
+    )
+    assert res.status_code == 200, res.content
+    assert res.json()["email"] == ""
+
+
+@pytest.mark.django_db
+def test_update_profile_invalid_email_rejected(client: Client, world_a) -> None:
+    _, user, _ = _make_parent(world_a, PHONE_A)
+    res = client.patch(
+        "/api/v1/parent/parent/me",
+        data={"email": "not-an-email"},
+        content_type="application/json",
+        **_auth(user),
+    )
+    assert res.status_code == 422
+
+
+@pytest.mark.django_db
+def test_update_profile_empty_name_rejected(client: Client, world_a) -> None:
+    _, user, _ = _make_parent(world_a, PHONE_A)
+    res = client.patch(
+        "/api/v1/parent/parent/me",
+        data={"name": "   "},
+        content_type="application/json",
+        **_auth(user),
+    )
+    assert res.status_code == 422
+
+
+@pytest.mark.django_db
+def test_update_profile_unauthenticated_rejected(client: Client, world_a) -> None:
+    res = client.patch(
+        "/api/v1/parent/parent/me",
+        data={"name": "X"},
+        content_type="application/json",
+    )
+    assert res.status_code == 401
+
+
 @pytest.mark.django_db
 def test_dev_master_otp_logs_in(client: Client, world_a) -> None:
     """With the mock provider, the fixed dev code works without a sent OTP."""

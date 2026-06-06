@@ -17,6 +17,7 @@ from apps.accounts.parent_schemas import (
     SendOtpRequest,
     SendOtpResponse,
     SuccessResponse,
+    UpdateProfileRequest,
     VerifyOtpRequest,
     VerifyOtpResponse,
 )
@@ -52,3 +53,15 @@ def logout(request: HttpRequest) -> dict:
 @profile_router.get("/parent/me", response=ParentMeOut)
 def parent_me(request: HttpRequest) -> dict:
     return parent_services.get_parent_me(user=request.auth)  # type: ignore[attr-defined]
+
+
+@profile_router.patch("/parent/me", response=ParentMeOut)
+def update_parent_me(request: HttpRequest, payload: UpdateProfileRequest) -> dict:
+    """Update the parent's display name and/or email. Phone is read-only —
+    it's the login credential. Returns the full refreshed profile so the
+    client can drop it straight into local state."""
+    return parent_services.update_parent_profile(
+        user=request.auth,  # type: ignore[attr-defined]
+        name=payload.name,
+        email=payload.email,
+    )

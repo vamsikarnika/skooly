@@ -8,6 +8,7 @@ login ``User`` (role=parent) is created lazily and linked to the pre-seeded
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from typing import Any
 
@@ -24,7 +25,7 @@ from apps.accounts.services import (
     normalize_in_phone,
 )
 from apps.core.context import use_school
-from apps.core.exceptions import Conflict, InvalidOTP, NotFound
+from apps.core.exceptions import Conflict, InvalidOTP, NotFound, ValidationFailed
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +233,57 @@ def get_parent_me(*, user: Any) -> dict[str, Any]:
         parent = user.parent_profile
     except ObjectDoesNotExist as exc:
         raise NotFound("No parent profile linked to this account.") from exc
+    payload = build_parent_payload(parent)
+    payload["children"] = build_children_payload(parent)
+    return payload
+
+
+# A deliberately permissive RFC-5322-ish check — enough to catch typos without
+# pulling in email-validator. Empty string is allowed separately (clears).
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def update_parent_profile(
+    *, user: Any, name: str | None, email: str | None
+) -> dict[str, Any]:
+    """Update the parent's display name and/or email. Phone is read-only.
+
+    ``None`` leaves a field unchanged; ``email=""`` clears the email. Name +
+    email are mirrored onto the linked User so admin views stay consistent.
+    """
+    try:
+        parent = user.parent_profile
+    except ObjectDoesNotExist as exc:
+        raise NotFound("No parent profile linked to this account.") from exc
+
+    user_update_fields: list[str] = []
+    parent_update_fields: list[str] = []
+
+    if name is not None:
+        cleaned = name.strip()
+        if not cleaned:
+            raise ValidationFailed("Name cannot be empty.", {"name": ["required"]})
+        parent.name = cleaned
+        parent_update_fields.append("name")
+        parts = cleaned.split(" ", 1)
+        user.first_name = parts[0]
+        user.last_name = parts[1] if len(parts) > 1 else ""
+        user_update_fields += ["first_name", "last_name"]
+
+    if email is not None:
+        cleaned_email = email.strip()
+        if cleaned_email and not _EMAIL_RE.match(cleaned_email):
+            raise ValidationFailed("Invalid email address.", {"email": ["invalid format"]})
+        parent.email = cleaned_email
+        parent_update_fields.append("email")
+        user.email = cleaned_email
+        user_update_fields.append("email")
+
+    if parent_update_fields:
+        parent.save(update_fields=[*parent_update_fields, "updated_at"])
+    if user_update_fields:
+        user.save(update_fields=[*user_update_fields, "updated_at"])
+
     payload = build_parent_payload(parent)
     payload["children"] = build_children_payload(parent)
     return payload
