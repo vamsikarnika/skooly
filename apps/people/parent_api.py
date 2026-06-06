@@ -13,6 +13,7 @@ from ninja import Router
 
 from apps.accounts.parent_auth import get_parent_child, parent_jwt_auth
 from apps.attendance.models import Attendance
+from apps.communications.parent_api import announcement_queryset_for
 from apps.core.schemas import CamelSchema
 from apps.exams.models import Test, TestMode, TestScore
 from apps.fees.models import StudentFee
@@ -123,6 +124,19 @@ def feed(request: HttpRequest, child_id: int) -> dict:
                     "link_to": "/fees",
                 }
             )
+
+    # Announcements — most recent unread (school + child's class + section).
+    for a in announcement_queryset_for(student).filter(is_read=False).order_by("-date", "-id")[:2]:
+        items.append(
+            {
+                "id": f"ann-{a.id}",
+                "type": "announcement",
+                "message": a.title,
+                "detail": a.body[:120] if a.body else None,
+                "date": a.date.isoformat(),
+                "link_to": "/more/announcements",
+            }
+        )
 
     items.sort(key=lambda x: x["date"], reverse=True)
     return {"items": items[:10]}

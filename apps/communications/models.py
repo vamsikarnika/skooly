@@ -21,6 +21,61 @@ class NotificationType(models.TextChoices):
     TEST = "test", "Test"
 
 
+class AnnouncementCategory(models.TextChoices):
+    SCHOOL = "school", "School"
+    CLASS = "class", "Class"
+    EXAM = "exam", "Exam"
+    HOLIDAY = "holiday", "Holiday"
+    FEE = "fee", "Fee"
+
+
+class Announcement(TenantScopedModel):
+    """A broadcast notice. Targeting: school-wide (no target_class/section),
+    class-wide (target_class set), or section-wide (target_section set).
+
+    v1 simplification: is_read lives on the row and is shared across all
+    parents who can see it. Acceptable for the single-active-parent demo; will
+    need an AnnouncementReceipt join when multi-parent usage lands.
+    """
+
+    title = models.CharField(max_length=200)
+    body = models.TextField(blank=True)
+    date = models.DateField()
+    category = models.CharField(max_length=16, choices=AnnouncementCategory.choices)
+    target_class = models.ForeignKey(
+        "academics.Class",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="announcements",
+    )
+    target_section = models.ForeignKey(
+        "academics.Section",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="announcements",
+    )
+    is_read = models.BooleanField(default=False, db_index=True)
+
+    class Meta:
+        db_table = "announcements"
+        ordering = ["-date", "-id"]
+        indexes = [
+            models.Index(fields=["school", "-date"]),
+            models.Index(fields=["target_class", "-date"]),
+            models.Index(fields=["target_section", "-date"]),
+        ]
+
+    def __str__(self) -> str:
+        scope = "school"
+        if self.target_section_id:
+            scope = f"section={self.target_section_id}"
+        elif self.target_class_id:
+            scope = f"class={self.target_class_id}"
+        return f"[{self.category}] {self.title} ({scope})"
+
+
 class Notification(TenantScopedModel):
     student = models.ForeignKey(
         "people.Student", on_delete=models.CASCADE, related_name="notifications"

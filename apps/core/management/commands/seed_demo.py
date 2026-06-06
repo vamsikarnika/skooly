@@ -29,7 +29,12 @@ from apps.academics.models import (
 )
 from apps.accounts.models import User
 from apps.attendance.models import Attendance, AttendanceStatus
-from apps.communications.models import Notification, NotificationType
+from apps.communications.models import (
+    Announcement,
+    AnnouncementCategory,
+    Notification,
+    NotificationType,
+)
 from apps.core.context import use_school
 from apps.exams.models import Test, TestScore, TestType
 from apps.fees import services as fees_services
@@ -217,6 +222,9 @@ class Command(BaseCommand):
                     f"{', '.join(c.full_name for c in children)}"
                 ))
 
+                ann_count = self._seed_announcements(school, classes_map)
+                self.stdout.write(self.style.SUCCESS(f"  ✓ announcements: {ann_count}"))
+
         self.stdout.write(self.style.SUCCESS("Demo seed complete."))
 
     # --- Helpers ----------------------------------------------------------------
@@ -267,6 +275,38 @@ class Command(BaseCommand):
             )
             self._seed_notifications(school, child)
         return children
+
+    @staticmethod
+    def _seed_announcements(school: School, classes_map: dict[str, list[Section]]) -> int:
+        # Class 8 + Class 8-A so the demo Aarav sees class/section-targeted ones.
+        sections_c8 = classes_map.get("Class 8", [])
+        cls_8 = sections_c8[0].class_obj if sections_c8 else None
+        sec_8a = sections_c8[0] if sections_c8 else None
+        rows = [
+            ("Parent-Teacher Meeting",
+             "Scheduled this Saturday from 10 AM to 1 PM. Please meet your class teacher first.",
+             date(2026, 5, 25), AnnouncementCategory.SCHOOL, None, None, False),
+            ("School closed — Eid",
+             "School will remain closed on 17 May for Eid al-Adha.",
+             date(2026, 5, 17), AnnouncementCategory.HOLIDAY, None, None, True),
+            ("Annual Sports Day",
+             "Annual Sports Day on 30 May at the school grounds, 9 AM onwards.",
+             date(2026, 5, 30), AnnouncementCategory.SCHOOL, None, None, False),
+            ("Math Olympiad selection",
+             "Class 8 selection round next Wednesday during period 3.",
+             date(2026, 5, 22), AnnouncementCategory.CLASS, cls_8, None, False),
+            ("Class 8-A field trip permission",
+             "Permission slips for the museum visit are due Friday.",
+             date(2026, 5, 20), AnnouncementCategory.CLASS, None, sec_8a, True),
+        ]
+        Announcement.objects.bulk_create([
+            Announcement(
+                school=school, title=t, body=b, date=d, category=c,
+                target_class=tc, target_section=ts, is_read=ir,
+            )
+            for (t, b, d, c, tc, ts, ir) in rows
+        ])
+        return len(rows)
 
     @staticmethod
     def _seed_notifications(school: School, child: Student) -> None:
