@@ -21,11 +21,13 @@ from django.utils import timezone
 
 from apps.academics.models import (
     Class,
+    DayOfWeek,
     Section,
     StudentEnrollment,
     Subject,
     SubjectClassMapping,
     TeacherAssignment,
+    TimetablePeriod,
 )
 from apps.accounts.models import User
 from apps.attendance.models import Attendance, AttendanceStatus
@@ -225,6 +227,9 @@ class Command(BaseCommand):
                 ann_count = self._seed_announcements(school, classes_map)
                 self.stdout.write(self.style.SUCCESS(f"  ✓ announcements: {ann_count}"))
 
+                tt_count = self._seed_timetable(school, classes_map)
+                self.stdout.write(self.style.SUCCESS(f"  ✓ timetable periods: {tt_count}"))
+
         self.stdout.write(self.style.SUCCESS("Demo seed complete."))
 
     # --- Helpers ----------------------------------------------------------------
@@ -275,6 +280,73 @@ class Command(BaseCommand):
             )
             self._seed_notifications(school, child)
         return children
+
+    @staticmethod
+    def _seed_timetable(school: School, classes_map: dict[str, list[Section]]) -> int:
+        """Seed a weekly timetable for every section. Higher classes (6-10) get
+        8 periods Mon-Fri + 5 on Sat; lower classes (1-5) get 7 + 5. Lunch /
+        recess gaps are inferred client-side from the time gaps."""
+
+        # Period slots per day. Slot tuples are (period_number, start, end).
+        weekday_high = [
+            (1, time(8, 0), time(8, 45)),
+            (2, time(8, 45), time(9, 30)),
+            (3, time(9, 30), time(10, 15)),
+            (4, time(10, 30), time(11, 15)),
+            (5, time(11, 15), time(12, 0)),
+            (6, time(12, 45), time(13, 30)),
+            (7, time(13, 30), time(14, 15)),
+            (8, time(14, 15), time(15, 0)),
+        ]
+        weekday_low = [
+            (1, time(8, 30), time(9, 15)),
+            (2, time(9, 15), time(10, 0)),
+            (3, time(10, 0), time(10, 45)),
+            (4, time(11, 0), time(11, 45)),
+            (5, time(11, 45), time(12, 30)),
+            (6, time(13, 0), time(13, 45)),
+            (7, time(13, 45), time(14, 30)),
+        ]
+        sat_high = weekday_high[:5]
+        sat_low = weekday_low[:5]
+        weekdays = [DayOfWeek.MON, DayOfWeek.TUE, DayOfWeek.WED, DayOfWeek.THU, DayOfWeek.FRI]
+
+        rows: list[TimetablePeriod] = []
+        for cls_name, sections in classes_map.items():
+            level = next(o for n, o in CLASS_LEVELS if n == cls_name)
+            cls_subjects = list(
+                Subject.objects.filter(class_mappings__class_obj__name=cls_name).order_by("id")
+            )
+            if not cls_subjects:
+                continue
+            weekday_slots = weekday_high if level >= 6 else weekday_low
+            sat_slots = sat_high if level >= 6 else sat_low
+
+            for section in sections:
+                assignments = {
+                    a.subject_id: a.teacher
+                    for a in TeacherAssignment.objects.filter(section=section).select_related("teacher")
+                }
+                for day in weekdays:
+                    for idx, (pnum, start, end) in enumerate(weekday_slots):
+                        # Rotate subjects per day so every day looks varied.
+                        subj = cls_subjects[(idx + day.value * 3) % len(cls_subjects)]
+                        rows.append(TimetablePeriod(
+                            school=school, section=section, day_of_week=day,
+                            period_number=pnum, subject=subj,
+                            teacher=assignments.get(subj.id),
+                            start_time=start, end_time=end,
+                        ))
+                for idx, (pnum, start, end) in enumerate(sat_slots):
+                    subj = cls_subjects[idx % len(cls_subjects)]
+                    rows.append(TimetablePeriod(
+                        school=school, section=section, day_of_week=DayOfWeek.SAT,
+                        period_number=pnum, subject=subj,
+                        teacher=assignments.get(subj.id),
+                        start_time=start, end_time=end,
+                    ))
+        TimetablePeriod.objects.bulk_create(rows, batch_size=2000)
+        return len(rows)
 
     @staticmethod
     def _seed_announcements(school: School, classes_map: dict[str, list[Section]]) -> int:

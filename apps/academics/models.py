@@ -138,3 +138,56 @@ class SubjectClassMapping(TenantScopedModel):
     class Meta:
         db_table = "subject_class_mappings"
         unique_together = [("subject", "class_obj")]
+
+
+class DayOfWeek(models.IntegerChoices):
+    """Indian school week - Sunday is a holiday, so we only model Mon-Sat.
+    Stored as int so chronological sort is trivial."""
+
+    MON = 1, "Monday"
+    TUE = 2, "Tuesday"
+    WED = 3, "Wednesday"
+    THU = 4, "Thursday"
+    FRI = 5, "Friday"
+    SAT = 6, "Saturday"
+
+
+class TimetablePeriod(TenantScopedModel):
+    """One period in a section's weekly schedule.
+
+    Lunch / recess gaps are not modelled — the parent screen infers them from
+    the time gap between consecutive periods.
+    """
+
+    section = models.ForeignKey(
+        Section, on_delete=models.CASCADE, related_name="timetable_periods"
+    )
+    day_of_week = models.PositiveSmallIntegerField(choices=DayOfWeek.choices)
+    period_number = models.PositiveSmallIntegerField()
+    subject = models.ForeignKey(
+        Subject, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="timetable_periods",
+    )
+    teacher = models.ForeignKey(
+        "people.Teacher", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="timetable_periods",
+    )
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+
+    class Meta:
+        db_table = "timetable_periods"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["section", "day_of_week", "period_number"],
+                name="uniq_section_day_period",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["section", "day_of_week", "period_number"]),
+        ]
+        ordering = ["day_of_week", "period_number"]
+
+    def __str__(self) -> str:
+        subj = self.subject.name if self.subject else "—"
+        return f"{self.section_id} {self.get_day_of_week_display()} P{self.period_number} {subj}"

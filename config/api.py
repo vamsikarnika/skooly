@@ -3,6 +3,7 @@
 from ninja import NinjaAPI
 
 from apps.academics.api import router as academics_router
+from apps.academics.parent_api import router as parent_timetable_router
 from apps.academics.teacher_api import router as teacher_classes_router
 from apps.accounts.api import router as accounts_router
 from apps.accounts.parent_api import profile_router as parent_profile_router
@@ -93,5 +94,6 @@ parent_api.add_router("/", parent_attendance_router)
 parent_api.add_router("/", parent_marks_router)
 parent_api.add_router("/", parent_fees_router)
 parent_api.add_router("/", parent_notifications_router)
+parent_api.add_router("/", parent_timetable_router)
 
 register_exception_handlers(parent_api)
