@@ -229,3 +229,97 @@ class ReportCard(TenantScopedModel):
     @property
     def is_published(self) -> bool:
         return self.published_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Online test submissions
+# ---------------------------------------------------------------------------
+
+
+class SubmissionStatus(models.TextChoices):
+    """A submission is either in-progress (the student is taking the test, or
+    paused mid-test on a re-open) or submitted (graded, immutable)."""
+
+    IN_PROGRESS = "in_progress", "In progress"
+    SUBMITTED = "submitted", "Submitted"
+
+
+class TestSubmission(TenantScopedModel):
+    """A student's attempt at one online test.
+
+    Exactly one row per (test, student) - re-opening the test resumes the
+    same submission rather than starting fresh. ``total_marks`` is populated
+    only at submit time, alongside an aggregate ``TestScore`` row so the
+    existing teacher reports keep working for online tests too.
+    """
+
+    test = models.ForeignKey(Test, on_delete=models.CASCADE, related_name="submissions")
+    student = models.ForeignKey(
+        "people.Student", on_delete=models.CASCADE, related_name="test_submissions"
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=SubmissionStatus.choices,
+        default=SubmissionStatus.IN_PROGRESS,
+    )
+    started_at = models.DateTimeField(auto_now_add=True)
+    submitted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    # Populated at submit time; null while in progress.
+    total_marks = models.PositiveSmallIntegerField(null=True, blank=True)
+    max_marks = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        db_table = "test_submissions"
+        constraints = [
+            models.UniqueConstraint(fields=["test", "student"], name="uniq_test_student_submission"),
+        ]
+        indexes = [
+            models.Index(fields=["student", "-submitted_at"]),
+            models.Index(fields=["test"]),
+        ]
+        ordering = ["-submitted_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"Submission(test={self.test_id} student={self.student_id} {self.status})"
+
+    @property
+    def is_submitted(self) -> bool:
+        return self.status == SubmissionStatus.SUBMITTED
+
+
+class SubmissionAnswer(TenantScopedModel):
+    """One student answer within a submission.
+
+    For MCQ questions, ``selected_option`` references the chosen MCQOption.
+    For short-answer questions, ``text_answer`` holds the free text.
+    ``is_correct`` + ``marks_awarded`` are stamped at submit time by the
+    auto-grader and remain null while the submission is in progress.
+    """
+
+    submission = models.ForeignKey(
+        TestSubmission, on_delete=models.CASCADE, related_name="answers"
+    )
+    question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name="answers")
+    # MCQ -> one of the question's options. Short answer -> null.
+    selected_option = models.ForeignKey(
+        MCQOption, on_delete=models.SET_NULL, null=True, blank=True, related_name="answers"
+    )
+    # Short answer -> typed response. MCQ -> blank.
+    text_answer = models.CharField(max_length=200, blank=True)
+    is_correct = models.BooleanField(null=True, blank=True)
+    marks_awarded = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        db_table = "submission_answers"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["submission", "question"], name="uniq_submission_question_answer"
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["submission"]),
+        ]
+        ordering = ["question__display_order"]
+
+    def __str__(self) -> str:
+        return f"Answer(submission={self.submission_id} q={self.question_id})"
