@@ -15,7 +15,7 @@ from ninja import Router
 from apps.accounts.parent_auth import get_parent_child, parent_jwt_auth
 from apps.core.exceptions import NotFound
 from apps.core.schemas import CamelSchema
-from apps.exams.models import Test, TestMode, TestScore
+from apps.exams.models import ReportCard, Test, TestMode, TestScore
 
 router = Router(tags=["parent-marks"], auth=parent_jwt_auth, by_alias=True)
 
@@ -114,3 +114,57 @@ def get_test(request: HttpRequest, child_id: int, test_id: int) -> dict:
     if test is None:
         raise NotFound("No such test for this child.")
     return _result(test, student)
+
+
+# ---------------------------------------------------------------------------
+# Report cards
+# ---------------------------------------------------------------------------
+
+
+class ReportCardSubjectOut(CamelSchema):
+    name: str
+    max_marks: int
+    marks: int
+    grade: str
+
+
+class ReportCardOut(CamelSchema):
+    id: int
+    term: str
+    academic_year: str
+    issue_date: str
+    subjects: list[ReportCardSubjectOut]
+    attendance_pct: int
+    teacher_remark: str
+    principal_remark: str | None = None
+    overall_grade: str
+    overall_pct: int
+    rank: int | None = None
+    total_students: int
+
+
+def _serialize_card(card: ReportCard) -> dict:
+    """Pull the rendered payload from the immutable snapshot and stamp the id."""
+    snap = dict(card.data_snapshot or {})
+    snap["id"] = card.id
+    return snap
+
+
+@router.get("/children/{child_id}/report-cards", response=list[ReportCardOut])
+def list_report_cards(request: HttpRequest, child_id: int) -> list[dict]:
+    student = get_parent_child(request, child_id)
+    cards = ReportCard.objects.filter(
+        student=student, published_at__isnull=False
+    ).order_by("-published_at", "-id")
+    return [_serialize_card(c) for c in cards]
+
+
+@router.get("/children/{child_id}/report-cards/{card_id}", response=ReportCardOut)
+def get_report_card(request: HttpRequest, child_id: int, card_id: int) -> dict:
+    student = get_parent_child(request, child_id)
+    card = ReportCard.objects.filter(
+        id=card_id, student=student, published_at__isnull=False
+    ).first()
+    if card is None:
+        raise NotFound("No such report card for this child.")
+    return _serialize_card(card)
