@@ -38,7 +38,20 @@ from apps.communications.models import (
     NotificationType,
 )
 from apps.core.context import use_school
-from apps.exams.models import ReportCard, ReportCardTerm, Test, TestScore, TestType
+from apps.exams.models import (
+    MCQOption,
+    Question,
+    QuestionType,
+    ReportCard,
+    ReportCardTerm,
+    SubmissionAnswer,
+    SubmissionStatus,
+    Test,
+    TestMode,
+    TestScore,
+    TestSubmission,
+    TestType,
+)
 from apps.fees import services as fees_services
 from apps.fees.models import (
     FeeStructure,
@@ -235,6 +248,14 @@ class Command(BaseCommand):
                     f"  ✓ report cards: {rc_count} published"
                 ))
 
+                ot_count, sub_count = self._seed_online_tests(
+                    school, children, teachers
+                )
+                self.stdout.write(self.style.SUCCESS(
+                    f"  ✓ online tests: {ot_count} published, "
+                    f"{sub_count} pre-submitted attempts"
+                ))
+
         self.stdout.write(self.style.SUCCESS("Demo seed complete."))
 
     # --- Helpers ----------------------------------------------------------------
@@ -285,6 +306,152 @@ class Command(BaseCommand):
             )
             self._seed_notifications(school, child)
         return children
+
+    @staticmethod
+    def _seed_online_tests(
+        school: School, children: list[Student], teachers: list[Teacher],
+    ) -> tuple[int, int]:
+        """Seed two online tests per demo child's section:
+          - A pending Math practice quiz with 5 MCQs (no submission yet)
+          - A completed Science review quiz with 5 MCQs (pre-submitted)
+        Returns (test count, pre-submitted submission count).
+        """
+        from apps.academics.models import Subject
+
+        # Same two tests per child's section — picked by name so the demo
+        # parent sees both a pending and a completed test on the list. Each
+        # questions_data entry is either:
+        #   (text, [(option, is_correct), ...])  — MCQ
+        #   (text, "correct text")              — short-answer
+        def make_quiz(
+            section, subject_name: str, name: str, available_until,
+            questions_data: list,
+        ) -> Test:
+            subject = Subject.objects.filter(
+                school=school, name=subject_name
+            ).first() or Subject.objects.filter(school=school).first()
+            teacher = section.class_teacher or (teachers[0] if teachers else None)
+            test = Test.objects.create(
+                school=school, section=section, subject=subject, name=name,
+                test_type=TestType.OTHER, mode=TestMode.ONLINE,
+                test_date=timezone.now().date(),
+                available_from=timezone.now() - timezone.timedelta(days=1),
+                available_until=available_until,
+                duration_min=20,
+                max_marks=sum(1 for _ in questions_data),  # 1 mark per question
+                created_by=teacher,
+                published_at=timezone.now(),
+            )
+            for idx, (q_text, payload) in enumerate(questions_data):
+                if isinstance(payload, str):
+                    # Short-answer question — no MCQOption rows, correct text
+                    # lives on the Question itself for case-insensitive
+                    # equality at grade time.
+                    Question.objects.create(
+                        school=school, test=test,
+                        question_type=QuestionType.SHORT_ANSWER,
+                        text=q_text, marks=1, display_order=idx, topic=subject_name,
+                        correct_answer=payload,
+                    )
+                else:
+                    q = Question.objects.create(
+                        school=school, test=test,
+                        question_type=QuestionType.MCQ,
+                        text=q_text, marks=1, display_order=idx, topic=subject_name,
+                    )
+                    for o_idx, (o_text, is_correct) in enumerate(payload):
+                        MCQOption.objects.create(
+                            question=q, text=o_text, is_correct=is_correct,
+                            display_order=o_idx,
+                        )
+            return test
+
+        math_questions = [
+            ("What is 7 x 8?",
+             [("54", False), ("56", True), ("64", False), ("48", False)]),
+            ("Which is a prime number?",
+             [("9", False), ("21", False), ("11", True), ("15", False)]),
+            ("What is 144 / 12?",
+             [("11", False), ("12", True), ("14", False), ("10", False)]),
+            ("Round 47.6 to the nearest whole.",
+             [("47", False), ("48", True), ("47.5", False), ("50", False)]),
+            # Short-answer: case-insensitive equality at grade time.
+            ("Name the smallest prime number.", "2"),
+        ]
+        sci_questions = [
+            ("Which gas do plants absorb during photosynthesis?",
+             [("Oxygen", False), ("Carbon dioxide", True), ("Nitrogen", False), ("Hydrogen", False)]),
+            ("How many planets in our solar system?",
+             [("7", False), ("8", True), ("9", False), ("10", False)]),
+            ("Water freezes at?",
+             [("0°C", True), ("4°C", False), ("32°C", False), ("100°C", False)]),
+            ("Which is NOT a force?",
+             [("Gravity", False), ("Friction", False), ("Magnetism", False), ("Distance", True)]),
+            # Short-answer.
+            ("Tallest mountain on Earth?", "Mount Everest"),
+        ]
+
+        deadline = timezone.now() + timezone.timedelta(days=7)
+        tests_created = 0
+        submissions_created = 0
+
+        for child in children:
+            enroll = child.enrollments.filter(status="active").select_related("section").first()
+            if enroll is None:
+                continue
+            section = enroll.section
+
+            # 1. Pending Math quiz — no submission.
+            make_quiz(section, "Mathematics", "Practice Quiz — Numbers", deadline, math_questions)
+            tests_created += 1
+
+            # 2. Completed Science quiz — pre-submit with a mixed result so
+            # the demo parent can immediately tap into the result screen.
+            sci_test = make_quiz(section, "Science", "Revision Quiz — General Knowledge",
+                                 deadline, sci_questions)
+            tests_created += 1
+
+            submission = TestSubmission.objects.create(
+                school=school, test=sci_test, student=child,
+                status=SubmissionStatus.SUBMITTED,
+                submitted_at=timezone.now() - timezone.timedelta(hours=2),
+                max_marks=sci_test.max_marks or 0,
+            )
+            total = 0
+            for idx, q in enumerate(sci_test.questions.all().order_by("display_order")):
+                if q.question_type == QuestionType.SHORT_ANSWER:
+                    # Wrong text for the short-answer at the end so the demo
+                    # result shows a 4/5 mixed score including an "incorrect"
+                    # short-answer review row.
+                    SubmissionAnswer.objects.create(
+                        school=school, submission=submission, question=q,
+                        text_answer="Kanchenjunga",
+                        is_correct=False, marks_awarded=0,
+                    )
+                    continue
+                options = list(q.options.all().order_by("display_order"))
+                # First 4 MCQs answered correctly.
+                pick = next(o for o in options if o.is_correct) if idx < 4 else options[0]
+                is_correct = bool(pick.is_correct)
+                marks = q.marks if is_correct else 0
+                total += marks
+                SubmissionAnswer.objects.create(
+                    school=school, submission=submission, question=q,
+                    selected_option=pick, is_correct=is_correct, marks_awarded=marks,
+                )
+            submission.total_marks = total
+            submission.save(update_fields=["total_marks", "updated_at"])
+            # Mirror to TestScore so the existing teacher report endpoint
+            # also sees this online attempt.
+            TestScore.objects.update_or_create(
+                test=sci_test, student=child,
+                defaults={
+                    "school": school, "marks_obtained": total, "is_absent": False,
+                },
+            )
+            submissions_created += 1
+
+        return tests_created, submissions_created
 
     @staticmethod
     def _seed_report_cards(
