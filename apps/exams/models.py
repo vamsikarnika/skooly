@@ -168,3 +168,64 @@ class MCQOption(models.Model):
     def __str__(self) -> str:
         marker = " ✓" if self.is_correct else ""
         return f"{['A','B','C','D'][self.display_order]}. {self.text}{marker}"
+
+
+class ReportCardTerm(models.TextChoices):
+    """AP State Board terms. Annual = year-end summary across terms."""
+
+    TERM_1 = "term1", "Term 1"
+    TERM_2 = "term2", "Term 2"
+    ANNUAL = "annual", "Annual"
+
+
+class ReportCard(TenantScopedModel):
+    """A student's report card for one term.
+
+    The full rendered payload lives in ``data_snapshot`` so that corrections
+    to underlying test scores never silently rewrite a report the parent has
+    already seen. The teacher generates by aggregating TestScore rows
+    (deferred to a follow-up ticket) and publishes by setting
+    ``published_at``; drafts are invisible to the parent.
+    """
+
+    student = models.ForeignKey(
+        "people.Student", on_delete=models.CASCADE, related_name="report_cards"
+    )
+    academic_year = models.ForeignKey(
+        "schools.AcademicYear", on_delete=models.PROTECT, related_name="report_cards"
+    )
+    term = models.CharField(max_length=16, choices=ReportCardTerm.choices)
+    generated_by = models.ForeignKey(
+        "people.Teacher",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="report_cards_generated",
+    )
+    generated_at = models.DateTimeField(auto_now_add=True)
+    published_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    # Full rendered payload — see apps/exams/parent_api.ReportCardOut for the
+    # exact shape the parent app consumes.
+    data_snapshot = models.JSONField(default=dict)
+    pdf_url = models.URLField(blank=True)
+
+    class Meta:
+        db_table = "report_cards"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "academic_year", "term"],
+                name="uniq_student_year_term_report",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["student", "-published_at"]),
+            models.Index(fields=["school", "-published_at"]),
+        ]
+        ordering = ["-published_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"ReportCard(student={self.student_id} term={self.term})"
+
+    @property
+    def is_published(self) -> bool:
+        return self.published_at is not None

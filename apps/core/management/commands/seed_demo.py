@@ -38,7 +38,7 @@ from apps.communications.models import (
     NotificationType,
 )
 from apps.core.context import use_school
-from apps.exams.models import Test, TestScore, TestType
+from apps.exams.models import ReportCard, ReportCardTerm, Test, TestScore, TestType
 from apps.fees import services as fees_services
 from apps.fees.models import (
     FeeStructure,
@@ -230,6 +230,11 @@ class Command(BaseCommand):
                 tt_count = self._seed_timetable(school, classes_map)
                 self.stdout.write(self.style.SUCCESS(f"  ✓ timetable periods: {tt_count}"))
 
+                rc_count = self._seed_report_cards(school, children, year)
+                self.stdout.write(self.style.SUCCESS(
+                    f"  ✓ report cards: {rc_count} published"
+                ))
+
         self.stdout.write(self.style.SUCCESS("Demo seed complete."))
 
     # --- Helpers ----------------------------------------------------------------
@@ -280,6 +285,101 @@ class Command(BaseCommand):
             )
             self._seed_notifications(school, child)
         return children
+
+    @staticmethod
+    def _seed_report_cards(
+        school: School, children: list[Student], year: AcademicYear
+    ) -> int:
+        """Seed Term 1 + Term 2 report cards (both published) for each demo child."""
+
+        def grade(pct: float) -> str:
+            if pct >= 91:
+                return "A1"
+            if pct >= 81:
+                return "A2"
+            if pct >= 71:
+                return "B1"
+            if pct >= 61:
+                return "B2"
+            if pct >= 51:
+                return "C1"
+            if pct >= 41:
+                return "C2"
+            if pct >= 33:
+                return "D"
+            return "E"
+
+        # Class 8 subjects (Aarav) vs Class 5 subjects (Ananya) — keep distinct
+        # marks so the two children's cards don't look identical in the demo.
+        class_8_subjects = [
+            ("Mathematics",    [68, 74]),  # [term1_marks, term2_marks]
+            ("Science",        [72, 76]),
+            ("Social Studies", [78, 82]),
+            ("English",        [81, 85]),
+            ("Hindi",          [65, 70]),
+            ("Computer Sci.",  [85, 88]),
+        ]
+        class_5_subjects = [
+            ("Mathematics",    [88, 85]),
+            ("Science",        [82, 79]),
+            ("Social Studies", [76, 80]),
+            ("English",        [90, 92]),
+            ("Hindi",          [84, 88]),
+        ]
+
+        term_meta = [
+            (ReportCardTerm.TERM_1, "Term 1", date(2025, 10, 31)),
+            (ReportCardTerm.TERM_2, "Term 2", date(2026, 2, 28)),
+        ]
+        remark_options = [
+            "A focused student with steady improvement this term. Keep up the good effort.",
+            "Shows consistent application and active class participation. Encouraged to keep aiming higher.",
+        ]
+        principal_remark = "Maintains a positive attitude and sets a good example for peers."
+
+        rows: list[ReportCard] = []
+        for child in children:
+            # Class-aware subject set + section size for rank denom.
+            enroll = child.enrollments.filter(status="active").first()
+            section = enroll.section if enroll else None
+            total_students = (
+                StudentEnrollment.objects.filter(section=section, status="active").count()
+                if section else 30
+            )
+            is_upper = bool(enroll and enroll.section.class_obj.display_order >= 6)
+            subjects = class_8_subjects if is_upper else class_5_subjects
+
+            for term_idx, (term_value, term_label, issue_date) in enumerate(term_meta):
+                subj_payload = []
+                total_marks = 0
+                for name, marks_pair in subjects:
+                    m = marks_pair[term_idx]
+                    subj_payload.append({
+                        "name": name, "maxMarks": 100, "marks": m, "grade": grade(m),
+                    })
+                    total_marks += m
+                overall_pct = round(total_marks / len(subjects))
+
+                snapshot = {
+                    "term": term_label,
+                    "academicYear": year.label,
+                    "issueDate": issue_date.isoformat(),
+                    "subjects": subj_payload,
+                    "attendancePct": 92 if term_idx == 1 else 87,
+                    "teacherRemark": remark_options[term_idx],
+                    "principalRemark": principal_remark if term_idx == 1 else None,
+                    "overallGrade": grade(overall_pct),
+                    "overallPct": overall_pct,
+                    "rank": 9 if term_idx == 1 else 7,
+                    "totalStudents": total_students,
+                }
+                rows.append(ReportCard(
+                    school=school, student=child, academic_year=year, term=term_value,
+                    published_at=timezone.now(),
+                    data_snapshot=snapshot,
+                ))
+        ReportCard.objects.bulk_create(rows)
+        return len(rows)
 
     @staticmethod
     def _seed_timetable(school: School, classes_map: dict[str, list[Section]]) -> int:
