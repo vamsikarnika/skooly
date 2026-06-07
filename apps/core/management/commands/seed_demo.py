@@ -319,10 +319,13 @@ class Command(BaseCommand):
         from apps.academics.models import Subject
 
         # Same two tests per child's section — picked by name so the demo
-        # parent sees both a pending and a completed test on the list.
+        # parent sees both a pending and a completed test on the list. Each
+        # questions_data entry is either:
+        #   (text, [(option, is_correct), ...])  — MCQ
+        #   (text, "correct text")              — short-answer
         def make_quiz(
             section, subject_name: str, name: str, available_until,
-            questions_data: list[tuple[str, list[tuple[str, bool]]]],
+            questions_data: list,
         ) -> Test:
             subject = Subject.objects.filter(
                 school=school, name=subject_name
@@ -339,16 +342,28 @@ class Command(BaseCommand):
                 created_by=teacher,
                 published_at=timezone.now(),
             )
-            for idx, (q_text, options) in enumerate(questions_data):
-                q = Question.objects.create(
-                    school=school, test=test, question_type=QuestionType.MCQ,
-                    text=q_text, marks=1, display_order=idx, topic=subject_name,
-                )
-                for o_idx, (o_text, is_correct) in enumerate(options):
-                    MCQOption.objects.create(
-                        question=q, text=o_text, is_correct=is_correct,
-                        display_order=o_idx,
+            for idx, (q_text, payload) in enumerate(questions_data):
+                if isinstance(payload, str):
+                    # Short-answer question — no MCQOption rows, correct text
+                    # lives on the Question itself for case-insensitive
+                    # equality at grade time.
+                    Question.objects.create(
+                        school=school, test=test,
+                        question_type=QuestionType.SHORT_ANSWER,
+                        text=q_text, marks=1, display_order=idx, topic=subject_name,
+                        correct_answer=payload,
                     )
+                else:
+                    q = Question.objects.create(
+                        school=school, test=test,
+                        question_type=QuestionType.MCQ,
+                        text=q_text, marks=1, display_order=idx, topic=subject_name,
+                    )
+                    for o_idx, (o_text, is_correct) in enumerate(payload):
+                        MCQOption.objects.create(
+                            question=q, text=o_text, is_correct=is_correct,
+                            display_order=o_idx,
+                        )
             return test
 
         math_questions = [
@@ -360,8 +375,8 @@ class Command(BaseCommand):
              [("11", False), ("12", True), ("14", False), ("10", False)]),
             ("Round 47.6 to the nearest whole.",
              [("47", False), ("48", True), ("47.5", False), ("50", False)]),
-            ("Square root of 81?",
-             [("7", False), ("8", False), ("9", True), ("11", False)]),
+            # Short-answer: case-insensitive equality at grade time.
+            ("Name the smallest prime number.", "2"),
         ]
         sci_questions = [
             ("Which gas do plants absorb during photosynthesis?",
@@ -372,8 +387,8 @@ class Command(BaseCommand):
              [("0°C", True), ("4°C", False), ("32°C", False), ("100°C", False)]),
             ("Which is NOT a force?",
              [("Gravity", False), ("Friction", False), ("Magnetism", False), ("Distance", True)]),
-            ("Tallest mountain on Earth?",
-             [("K2", False), ("Mount Everest", True), ("Kilimanjaro", False), ("Denali", False)]),
+            # Short-answer.
+            ("Tallest mountain on Earth?", "Mount Everest"),
         ]
 
         deadline = timezone.now() + timezone.timedelta(days=7)
@@ -404,8 +419,18 @@ class Command(BaseCommand):
             )
             total = 0
             for idx, q in enumerate(sci_test.questions.all().order_by("display_order")):
+                if q.question_type == QuestionType.SHORT_ANSWER:
+                    # Wrong text for the short-answer at the end so the demo
+                    # result shows a 4/5 mixed score including an "incorrect"
+                    # short-answer review row.
+                    SubmissionAnswer.objects.create(
+                        school=school, submission=submission, question=q,
+                        text_answer="Kanchenjunga",
+                        is_correct=False, marks_awarded=0,
+                    )
+                    continue
                 options = list(q.options.all().order_by("display_order"))
-                # First 4 questions answered correctly, last one wrong.
+                # First 4 MCQs answered correctly.
                 pick = next(o for o in options if o.is_correct) if idx < 4 else options[0]
                 is_correct = bool(pick.is_correct)
                 marks = q.marks if is_correct else 0
