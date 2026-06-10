@@ -49,6 +49,22 @@ class VerifyOtpResponse(CamelSchema):
     children: list[ChildOut]
 
 
+class PasswordLoginRequest(CamelSchema):
+    """Phone + password login. Used in place of OTP until real SMS delivery
+    ships (tracked in ClickUp 86d39qahj)."""
+
+    phone: str
+    password: str
+
+
+# Identical shape to VerifyOtpResponse so the frontend's auth context can
+# reuse the same VerifyOtpResponse type and react no differently. Kept as a
+# separate symbol for documentation + so the OpenAPI schema makes the
+# alternate flow explicit.
+class PasswordLoginResponse(VerifyOtpResponse):
+    pass
+
+
 class RefreshResponse(CamelSchema):
     token: str
 
@@ -64,3 +80,11 @@ class UpdateProfileRequest(CamelSchema):
 
     name: str | None = None
     email: str | None = None
+
+
+class ChangePasswordRequest(CamelSchema):
+    """Change password as an already-authenticated parent. Both fields
+    required; the backend rejects a short new password or a no-op change."""
+
+    current_password: str
+    new_password: str

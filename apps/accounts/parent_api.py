@@ -12,7 +12,10 @@ from ninja import Router
 from apps.accounts import parent_services
 from apps.accounts.parent_auth import parent_jwt_auth
 from apps.accounts.parent_schemas import (
+    ChangePasswordRequest,
     ParentMeOut,
+    PasswordLoginRequest,
+    PasswordLoginResponse,
     RefreshResponse,
     SendOtpRequest,
     SendOtpResponse,
@@ -25,6 +28,18 @@ from apps.accounts.parent_schemas import (
 router = Router(tags=["parent-auth"], auth=parent_jwt_auth, by_alias=True)
 profile_router = Router(tags=["parent-profile"], auth=parent_jwt_auth, by_alias=True)
 
+
+@router.post("/login", response=PasswordLoginResponse, auth=None)
+def login(request: HttpRequest, payload: PasswordLoginRequest) -> dict:
+    """Phone + password login — the active parent auth path while real OTP
+    delivery is deferred (ClickUp 86d39qahj). The OTP endpoints below are
+    intentionally kept in place for easy revival."""
+    return parent_services.parent_password_login(payload.phone, payload.password)
+
+
+# ---- Dormant OTP endpoints ------------------------------------------------
+# Kept wired so reviving real SMS-based OTP later is a frontend-only change.
+# Not currently called by the parent app.
 
 @router.post("/send-otp", response=SendOtpResponse, auth=None)
 def send_otp(request: HttpRequest, payload: SendOtpRequest) -> dict:
@@ -65,3 +80,16 @@ def update_parent_me(request: HttpRequest, payload: UpdateProfileRequest) -> dic
         name=payload.name,
         email=payload.email,
     )
+
+
+@profile_router.patch("/parent/me/password", response=SuccessResponse)
+def change_password(request: HttpRequest, payload: ChangePasswordRequest) -> dict:
+    """Change the authenticated parent's password. The existing session token
+    keeps working (we don't rotate it), so the client just stays signed in
+    with the new password live for the next login."""
+    parent_services.change_parent_password(
+        user=request.auth,  # type: ignore[attr-defined]
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+    )
+    return {"success": True}

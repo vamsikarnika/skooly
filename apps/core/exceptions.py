@@ -53,6 +53,15 @@ class InvalidOTP(APIError):
     code = "INVALID_OTP"
 
 
+class InvalidCredentials(APIError):
+    """Generic auth failure — wrong phone/password combo. Deliberately does
+    NOT distinguish 'unknown phone' from 'wrong password' to avoid leaking
+    which half failed."""
+
+    status_code = 400
+    code = "INVALID_CREDENTIALS"
+
+
 def _error_response(
     request: HttpRequest,
     api: NinjaAPI,

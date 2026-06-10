@@ -25,7 +25,13 @@ from apps.accounts.services import (
     normalize_in_phone,
 )
 from apps.core.context import use_school
-from apps.core.exceptions import Conflict, InvalidOTP, NotFound, ValidationFailed
+from apps.core.exceptions import (
+    Conflict,
+    InvalidCredentials,
+    InvalidOTP,
+    NotFound,
+    ValidationFailed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +175,71 @@ def verify_parent_otp(phone: str, otp: str) -> dict[str, Any]:
             "parent": build_parent_payload(parent),
             "children": build_children_payload(parent),
         }
+
+
+MIN_PASSWORD_LENGTH = 6
+
+
+def parent_password_login(phone: str, password: str) -> dict[str, Any]:
+    """Authenticate a parent with phone + password.
+
+    The User row must already exist with a usable password — school admins
+    set the initial password out-of-band (Django admin today; admin app UI
+    in [Admin] ClickUp follow-up). If it doesn't, this returns the same
+    generic 'invalid credentials' as a wrong-password attempt so we don't
+    leak which half of the credential failed.
+
+    This is the active auth path while real OTP/SMS delivery is deferred
+    (ClickUp 86d39qahj).
+    """
+    parent = find_eligible_parent(phone)
+    if parent is None:
+        raise NotFound("No parent account found for this number.")
+
+    normalized = normalize_in_phone(phone)
+    user = User.objects.filter(phone=normalized).first()
+    if user is None or not user.has_usable_password() or not user.check_password(password):
+        # One generic error for all three branches — never reveals whether
+        # the account exists, has a password set, or got the password wrong.
+        raise InvalidCredentials("Phone or password is incorrect.")
+    if user.role != Role.PARENT:
+        raise Conflict("That phone is already in use by another account.")
+
+    # Belt-and-braces: keep parent.user pinned (older seeds or admin edits
+    # could leave this null).
+    if parent.user_id != user.id:
+        parent.user = user
+        parent.save(update_fields=["user"])
+
+    user.touch_last_login()
+    token = issue_tokens_for_user(user)["access_token"]
+    with use_school(parent.school):
+        return {
+            "token": token,
+            "parent": build_parent_payload(parent),
+            "children": build_children_payload(parent),
+        }
+
+
+def change_parent_password(*, user: Any, current_password: str, new_password: str) -> None:
+    """Authenticated password change. Verifies the current password before
+    setting the new one — wrong current is the same generic
+    InvalidCredentials as a wrong login, no leak."""
+    if not user.check_password(current_password):
+        raise InvalidCredentials("Current password is incorrect.")
+    if len(new_password) < MIN_PASSWORD_LENGTH:
+        raise ValidationFailed(
+            f"Password must be at least {MIN_PASSWORD_LENGTH} characters.",
+            {"new_password": ["too short"]},
+        )
+    if new_password == current_password:
+        raise ValidationFailed(
+            "New password must be different from the current one.",
+            {"new_password": ["same as current"]},
+        )
+    user.set_password(new_password)
+    user.save(update_fields=["password"])
+    logger.info("parent_password_changed parent_user_id=%s", user.id)
 
 
 def parent_refresh(*, user: Any) -> dict[str, str]:
