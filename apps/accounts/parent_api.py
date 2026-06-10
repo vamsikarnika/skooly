@@ -12,6 +12,7 @@ from ninja import Router
 from apps.accounts import parent_services
 from apps.accounts.parent_auth import parent_jwt_auth
 from apps.accounts.parent_schemas import (
+    ChangePasswordRequest,
     ParentMeOut,
     PasswordLoginRequest,
     PasswordLoginResponse,
@@ -79,3 +80,16 @@ def update_parent_me(request: HttpRequest, payload: UpdateProfileRequest) -> dic
         name=payload.name,
         email=payload.email,
     )
+
+
+@profile_router.patch("/parent/me/password", response=SuccessResponse)
+def change_password(request: HttpRequest, payload: ChangePasswordRequest) -> dict:
+    """Change the authenticated parent's password. The existing session token
+    keeps working (we don't rotate it), so the client just stays signed in
+    with the new password live for the next login."""
+    parent_services.change_parent_password(
+        user=request.auth,  # type: ignore[attr-defined]
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+    )
+    return {"success": True}

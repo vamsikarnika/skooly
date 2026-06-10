@@ -181,70 +181,35 @@ MIN_PASSWORD_LENGTH = 6
 
 
 def parent_password_login(phone: str, password: str) -> dict[str, Any]:
-    """Phone + password login with signup-on-first-use semantics.
+    """Authenticate a parent with phone + password.
 
-    - If the parent's User row already has a usable password, this works
-      like a standard login (check_password).
-    - If it does not (first time the parent has ever logged in), this
-      *sets* the supplied password as the account password and logs them in.
+    The User row must already exist with a usable password — school admins
+    set the initial password out-of-band (Django admin today; admin app UI
+    in [Admin] ClickUp follow-up). If it doesn't, this returns the same
+    generic 'invalid credentials' as a wrong-password attempt so we don't
+    leak which half of the credential failed.
 
-    Returns the same bootstrap payload as :func:`verify_parent_otp`.
-
-    This is the interim auth path while real OTP/SMS delivery is deferred
-    (ClickUp 86d39qahj). Until OTP lands, the "first to set a password
-    wins" risk is real — anyone who knows a registered parent's phone
-    could race them. Acceptable for demo + early pilot, not for scale.
+    This is the active auth path while real OTP/SMS delivery is deferred
+    (ClickUp 86d39qahj).
     """
     parent = find_eligible_parent(phone)
     if parent is None:
         raise NotFound("No parent account found for this number.")
 
-    if len(password) < MIN_PASSWORD_LENGTH:
-        raise ValidationFailed(
-            f"Password must be at least {MIN_PASSWORD_LENGTH} characters.",
-            {"password": ["too short"]},
-        )
-
     normalized = normalize_in_phone(phone)
-    existing = User.objects.filter(phone=normalized).first()
-    if existing is not None and existing.role != Role.PARENT:
+    user = User.objects.filter(phone=normalized).first()
+    if user is None or not user.has_usable_password() or not user.check_password(password):
+        # One generic error for all three branches — never reveals whether
+        # the account exists, has a password set, or got the password wrong.
+        raise InvalidCredentials("Phone or password is incorrect.")
+    if user.role != Role.PARENT:
         raise Conflict("That phone is already in use by another account.")
 
-    first_use = existing is None or not existing.has_usable_password()
-
-    with transaction.atomic():
-        if existing is None:
-            # Lazy-create mirrors verify_parent_otp's pattern, but here we set
-            # a real password (not unusable) so subsequent logins authenticate.
-            first, _, last = parent.name.partition(" ")
-            user = User(
-                phone=normalized,
-                role=Role.PARENT,
-                school=parent.school,
-                first_name=first,
-                last_name=last,
-                email=parent.email,
-                is_active=True,
-            )
-            user.set_password(password)
-            user.save()
-        else:
-            user = existing
-            if first_use:
-                # First-use signup: bind whatever password the parent typed.
-                user.set_password(password)
-                user.save(update_fields=["password"])
-            else:
-                if not user.check_password(password):
-                    raise InvalidCredentials("Phone or password is incorrect.")
-        if parent.user_id != user.id:
-            parent.user = user
-            parent.save(update_fields=["user"])
-
-    if first_use:
-        logger.info(
-            "parent_password_set_on_first_use phone=%s parent_id=%s", normalized, parent.id
-        )
+    # Belt-and-braces: keep parent.user pinned (older seeds or admin edits
+    # could leave this null).
+    if parent.user_id != user.id:
+        parent.user = user
+        parent.save(update_fields=["user"])
 
     user.touch_last_login()
     token = issue_tokens_for_user(user)["access_token"]
@@ -254,6 +219,27 @@ def parent_password_login(phone: str, password: str) -> dict[str, Any]:
             "parent": build_parent_payload(parent),
             "children": build_children_payload(parent),
         }
+
+
+def change_parent_password(*, user: Any, current_password: str, new_password: str) -> None:
+    """Authenticated password change. Verifies the current password before
+    setting the new one — wrong current is the same generic
+    InvalidCredentials as a wrong login, no leak."""
+    if not user.check_password(current_password):
+        raise InvalidCredentials("Current password is incorrect.")
+    if len(new_password) < MIN_PASSWORD_LENGTH:
+        raise ValidationFailed(
+            f"Password must be at least {MIN_PASSWORD_LENGTH} characters.",
+            {"new_password": ["too short"]},
+        )
+    if new_password == current_password:
+        raise ValidationFailed(
+            "New password must be different from the current one.",
+            {"new_password": ["same as current"]},
+        )
+    user.set_password(new_password)
+    user.save(update_fields=["password"])
+    logger.info("parent_password_changed parent_user_id=%s", user.id)
 
 
 def parent_refresh(*, user: Any) -> dict[str, str]:

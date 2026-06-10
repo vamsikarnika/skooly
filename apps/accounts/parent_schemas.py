@@ -80,3 +80,11 @@ class UpdateProfileRequest(CamelSchema):
 
     name: str | None = None
     email: str | None = None
+
+
+class ChangePasswordRequest(CamelSchema):
+    """Change password as an already-authenticated parent. Both fields
+    required; the backend rejects a short new password or a no-op change."""
+
+    current_password: str
+    new_password: str

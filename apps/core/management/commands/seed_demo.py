@@ -72,11 +72,13 @@ ADMIN_PASSWORD = "demo1234"
 TEACHER_PHONE = "+919876500001"
 TEACHER_PASSWORD = "demo1234"
 
-# Login-capable demo parent for the skooly-parent app. Phone-only (no
-# password seeded) — the parent goes through signup-on-first-use on the
-# login screen. Real OTP delivery deferred (ClickUp 86d39qahj).
+# Login-capable demo parent for the skooly-parent app. Password is set
+# up-front to mirror the real flow: in production the school admin
+# generates a password (out-of-band) and shares it with the parent. Real
+# OTP delivery deferred (ClickUp 86d39qahj).
 PARENT_PHONE = "+919876512345"
 PARENT_NAME = "Suresh Reddy"
+PARENT_PASSWORD = "skooly123"
 
 # --- Realistic name pools (AP/Telugu / pan-Indian) -----------------------------
 
@@ -234,7 +236,7 @@ class Command(BaseCommand):
 
                 children = self._seed_parent(school, classes_map)
                 self.stdout.write(self.style.SUCCESS(
-                    f"  ✓ parent login: {PARENT_PHONE} (set password on first login) → "
+                    f"  ✓ parent login: {PARENT_PHONE} / {PARENT_PASSWORD} → "
                     f"{', '.join(c.full_name for c in children)}"
                 ))
 
@@ -295,10 +297,27 @@ class Command(BaseCommand):
             return None
 
         children = [c for c in (adopt("Class 8", "Aarav"), adopt("Class 5", "Ananya")) if c]
-        # NOTE: deliberately no User row here. The parent goes through the
-        # first-use signup flow on the login screen (set their own password).
+        # Eagerly create the login User with the admin-set password. This
+        # mirrors production where school admin pre-provisions the password
+        # and shares it with the parent out-of-band (Django admin today;
+        # admin-app UI tracked separately).
+        from apps.accounts.models import Role, User
+
+        first, _, last = PARENT_NAME.partition(" ")
+        user = User(
+            phone=PARENT_PHONE,
+            role=Role.PARENT,
+            school=school,
+            first_name=first,
+            last_name=last,
+            email="suresh.reddy@example.com",
+            is_active=True,
+        )
+        user.set_password(PARENT_PASSWORD)
+        user.save()
         parent = Parent.objects.create(
             school=school,
+            user=user,
             name=PARENT_NAME,
             phone=PARENT_PHONE,
             email="suresh.reddy@example.com",
