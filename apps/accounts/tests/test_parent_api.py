@@ -107,6 +107,155 @@ def test_verify_otp_wrong_code_rejected(client: Client, world_a) -> None:
     assert res.status_code == 400
 
 
+# --- Password login (active auth path) -------------------------------------
+
+def _make_parent_no_user(world: dict, phone: str):
+    """Create a Parent row with NO linked User — mirrors the seeded state
+    where the parent hasn't logged in yet. The password-login endpoint should
+    lazy-create the User on first use."""
+    school, year, section = world["school"], world["year"], world["section_a"]
+    student = StudentFactory(school=school, first_name="Aarav", last_name="Reddy")
+    StudentEnrollment.objects.create(
+        school=school, student=student, section=section, academic_year=year,
+        roll_number="14", enrollment_date=date(2025, 6, 1), status="active",
+    )
+    school.current_academic_year = year
+    school.save(update_fields=["current_academic_year"])
+    parent = Parent.objects.create(school=school, name="Suresh Reddy", phone=phone)
+    ParentStudent.objects.create(school=school, parent=parent, student=student)
+    return parent, student
+
+
+@pytest.mark.django_db
+def test_password_login_unknown_phone_404(client: Client, world_a) -> None:
+    res = client.post(
+        "/api/v1/parent/auth/login",
+        data={"phone": "9999999999", "password": "whatever12"},
+        content_type="application/json",
+    )
+    assert res.status_code == 404
+
+
+@pytest.mark.django_db
+def test_password_login_first_use_sets_password_and_logs_in(
+    client: Client, world_a
+) -> None:
+    """No User row exists yet — first login creates one with the supplied
+    password and returns the bootstrap payload."""
+    _make_parent_no_user(world_a, PHONE_A)
+    assert not User.objects.filter(phone=PHONE_A).exists()
+
+    res = client.post(
+        "/api/v1/parent/auth/login",
+        data={"phone": PHONE_A, "password": "myFirstP@ss"},
+        content_type="application/json",
+    )
+    assert res.status_code == 200, res.content
+    body = res.json()
+    assert body["token"]
+    assert body["parent"]["name"] == "Suresh Reddy"
+    assert len(body["children"]) == 1
+
+    # User is now created with the chosen password and survives across logins.
+    user = User.objects.get(phone=PHONE_A)
+    assert user.role == Role.PARENT
+    assert user.has_usable_password()
+    assert user.check_password("myFirstP@ss")
+
+
+@pytest.mark.django_db
+def test_password_login_second_use_authenticates_existing_password(
+    client: Client, world_a
+) -> None:
+    _make_parent_no_user(world_a, PHONE_A)
+    # First login sets the password.
+    client.post(
+        "/api/v1/parent/auth/login",
+        data={"phone": PHONE_A, "password": "myFirstP@ss"},
+        content_type="application/json",
+    )
+    # Second login with the same password succeeds.
+    res = client.post(
+        "/api/v1/parent/auth/login",
+        data={"phone": PHONE_A, "password": "myFirstP@ss"},
+        content_type="application/json",
+    )
+    assert res.status_code == 200, res.content
+    assert res.json()["token"]
+
+
+@pytest.mark.django_db
+def test_password_login_second_use_wrong_password_rejected(
+    client: Client, world_a
+) -> None:
+    _make_parent_no_user(world_a, PHONE_A)
+    client.post(
+        "/api/v1/parent/auth/login",
+        data={"phone": PHONE_A, "password": "myFirstP@ss"},
+        content_type="application/json",
+    )
+    res = client.post(
+        "/api/v1/parent/auth/login",
+        data={"phone": PHONE_A, "password": "wrong-pass"},
+        content_type="application/json",
+    )
+    # Generic 400 — we don't leak whether the phone or password failed.
+    assert res.status_code == 400
+
+
+@pytest.mark.django_db
+def test_password_login_too_short_rejected(client: Client, world_a) -> None:
+    _make_parent_no_user(world_a, PHONE_A)
+    res = client.post(
+        "/api/v1/parent/auth/login",
+        data={"phone": PHONE_A, "password": "abc"},
+        content_type="application/json",
+    )
+    # ValidationFailed → 422 (input shape OK but business rule failed),
+    # vs InvalidCredentials → 400 for the wrong-password case.
+    assert res.status_code == 422
+
+
+@pytest.mark.django_db
+def test_password_login_existing_non_parent_user_rejected(
+    client: Client, world_a
+) -> None:
+    """If a phone is already used by a teacher/admin account, parent login
+    must not silently take it over."""
+    # Pre-existing non-parent user on this phone.
+    teacher_user = User.objects.create(
+        phone=PHONE_A, role=Role.TEACHER, school=world_a["school"],
+        first_name="Imposter", last_name="Teacher",
+    )
+    teacher_user.set_password("teacher-pass")
+    teacher_user.save()
+    _make_parent_no_user(world_a, PHONE_A)
+
+    res = client.post(
+        "/api/v1/parent/auth/login",
+        data={"phone": PHONE_A, "password": "myFirstP@ss"},
+        content_type="application/json",
+    )
+    # Conflict → 409
+    assert res.status_code == 409
+
+
+@pytest.mark.django_db
+def test_otp_endpoints_still_work_after_password_lands(
+    client: Client, world_a
+) -> None:
+    """Dormant OTP path must keep working — frontend isn't calling it but
+    we want revival (ClickUp 86d39qahj) to be a frontend-only change."""
+    _make_parent(world_a, PHONE_A)
+    code = parent_services.send_parent_otp(PHONE_A)
+    res = client.post(
+        "/api/v1/parent/auth/verify-otp",
+        data={"phone": PHONE_A, "otp": code},
+        content_type="application/json",
+    )
+    assert res.status_code == 200, res.content
+
+
 @pytest.mark.django_db
 def test_parent_me_returns_children(client: Client, world_a) -> None:
     _parent, user, _student = _make_parent(world_a, PHONE_A)

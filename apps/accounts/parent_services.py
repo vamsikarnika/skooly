@@ -25,7 +25,13 @@ from apps.accounts.services import (
     normalize_in_phone,
 )
 from apps.core.context import use_school
-from apps.core.exceptions import Conflict, InvalidOTP, NotFound, ValidationFailed
+from apps.core.exceptions import (
+    Conflict,
+    InvalidCredentials,
+    InvalidOTP,
+    NotFound,
+    ValidationFailed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +169,85 @@ def verify_parent_otp(phone: str, otp: str) -> dict[str, Any]:
     token = issue_tokens_for_user(user)["access_token"]
     # This endpoint is unauthenticated, so no tenant context was pinned by the
     # JWT middleware — set it explicitly so the children query is not fail-closed.
+    with use_school(parent.school):
+        return {
+            "token": token,
+            "parent": build_parent_payload(parent),
+            "children": build_children_payload(parent),
+        }
+
+
+MIN_PASSWORD_LENGTH = 6
+
+
+def parent_password_login(phone: str, password: str) -> dict[str, Any]:
+    """Phone + password login with signup-on-first-use semantics.
+
+    - If the parent's User row already has a usable password, this works
+      like a standard login (check_password).
+    - If it does not (first time the parent has ever logged in), this
+      *sets* the supplied password as the account password and logs them in.
+
+    Returns the same bootstrap payload as :func:`verify_parent_otp`.
+
+    This is the interim auth path while real OTP/SMS delivery is deferred
+    (ClickUp 86d39qahj). Until OTP lands, the "first to set a password
+    wins" risk is real — anyone who knows a registered parent's phone
+    could race them. Acceptable for demo + early pilot, not for scale.
+    """
+    parent = find_eligible_parent(phone)
+    if parent is None:
+        raise NotFound("No parent account found for this number.")
+
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValidationFailed(
+            f"Password must be at least {MIN_PASSWORD_LENGTH} characters.",
+            {"password": ["too short"]},
+        )
+
+    normalized = normalize_in_phone(phone)
+    existing = User.objects.filter(phone=normalized).first()
+    if existing is not None and existing.role != Role.PARENT:
+        raise Conflict("That phone is already in use by another account.")
+
+    first_use = existing is None or not existing.has_usable_password()
+
+    with transaction.atomic():
+        if existing is None:
+            # Lazy-create mirrors verify_parent_otp's pattern, but here we set
+            # a real password (not unusable) so subsequent logins authenticate.
+            first, _, last = parent.name.partition(" ")
+            user = User(
+                phone=normalized,
+                role=Role.PARENT,
+                school=parent.school,
+                first_name=first,
+                last_name=last,
+                email=parent.email,
+                is_active=True,
+            )
+            user.set_password(password)
+            user.save()
+        else:
+            user = existing
+            if first_use:
+                # First-use signup: bind whatever password the parent typed.
+                user.set_password(password)
+                user.save(update_fields=["password"])
+            else:
+                if not user.check_password(password):
+                    raise InvalidCredentials("Phone or password is incorrect.")
+        if parent.user_id != user.id:
+            parent.user = user
+            parent.save(update_fields=["user"])
+
+    if first_use:
+        logger.info(
+            "parent_password_set_on_first_use phone=%s parent_id=%s", normalized, parent.id
+        )
+
+    user.touch_last_login()
+    token = issue_tokens_for_user(user)["access_token"]
     with use_school(parent.school):
         return {
             "token": token,

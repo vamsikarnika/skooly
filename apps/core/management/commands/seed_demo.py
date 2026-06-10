@@ -72,8 +72,9 @@ ADMIN_PASSWORD = "demo1234"
 TEACHER_PHONE = "+919876500001"
 TEACHER_PASSWORD = "demo1234"
 
-# Login-capable demo parent for the skooly-parent app. OTP-only (no password).
-# Linked to two real seeded students, renamed so the demo reads naturally.
+# Login-capable demo parent for the skooly-parent app. Phone-only (no
+# password seeded) — the parent goes through signup-on-first-use on the
+# login screen. Real OTP delivery deferred (ClickUp 86d39qahj).
 PARENT_PHONE = "+919876512345"
 PARENT_NAME = "Suresh Reddy"
 
@@ -233,7 +234,7 @@ class Command(BaseCommand):
 
                 children = self._seed_parent(school, classes_map)
                 self.stdout.write(self.style.SUCCESS(
-                    f"  ✓ parent login: {PARENT_PHONE} (OTP) → "
+                    f"  ✓ parent login: {PARENT_PHONE} (set password on first login) → "
                     f"{', '.join(c.full_name for c in children)}"
                 ))
 
@@ -294,6 +295,8 @@ class Command(BaseCommand):
             return None
 
         children = [c for c in (adopt("Class 8", "Aarav"), adopt("Class 5", "Ananya")) if c]
+        # NOTE: deliberately no User row here. The parent goes through the
+        # first-use signup flow on the login screen (set their own password).
         parent = Parent.objects.create(
             school=school,
             name=PARENT_NAME,
