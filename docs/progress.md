@@ -3,6 +3,7 @@
 ## Current Status
 
 - Modules 1–4 + 7 complete (Module 5 on hold, Module 6 pending)
+- **Module 9 (parent app) Phases 1 + 2 shipped end-to-end** — see updated section below.
 - 62 endpoints · 116 tests passing · ruff clean
 
 ## Modules
@@ -15,39 +16,56 @@
 - [ ] Module 6: Report Cards
 - [x] **Module 7: Fees** — full CRUD + payments + receipts + dues
 - [ ] Module 8: Analytics
-- [~] **Module 9: Parent App (skooly-parent)** — Phase 1 shipped (auth + feed/attendance/marks/fees); Phase 2 pending
+- [x] **Module 9: Parent App (skooly-parent)** — Phases 1 + 2 shipped; native build readiness PR open
 - [ ] Module 10: Polish
 
-## Module 9 — Parent App (skooly-parent), Phase 1
+## Module 9 — Parent App (skooly-parent)
 
-Third NinjaAPI instance mounted at `/api/v1/parent/` (mirrors the teacher pattern), locked to `ParentJWTAuth`. Replaced the parent app's mock data with real endpoints.
+Third NinjaAPI instance mounted at `/api/v1/parent/`, locked to `ParentJWTAuth`. Backed by `people.Parent` (OneToOne `User`) + `people.ParentStudent` link.
 
-### Parent identity
-- New `Role.PARENT`; `people.Parent` (OneToOne `User`, OTP-only login, no password) + `people.ParentStudent` link (M2M with relation). `ParentJWTAuth` rejects non-parent tokens; `get_parent_child(child_id)` resolves a linked `Student` or **404** (never 403 — no existence leak).
-- Lazy User creation on first OTP verify (like teacher activation).
+### Auth (current state)
+- **Phone + password.** Admin pre-provisions the password out-of-band (Django admin today; admin-app UI tracked in [86d3a33yh](https://app.clickup.com/t/86d3a33yh)). Generic `InvalidCredentials` on any mismatch — never leaks which half failed.
+- **OTP code paths kept dormant** in `parent_services.py` for cheap revival once real SMS delivery lands ([86d39qahj](https://app.clickup.com/t/86d39qahj), `high`).
+- Token-rotation-free `/parent/me/password` lets logged-in parents change their password (current + new, with length + no-op guards).
 
-### Endpoints (11)
-- `POST /auth/send-otp`, `POST /auth/verify-otp` (→ token + parent + children bootstrap), `POST /auth/refresh`, `POST /auth/logout`
-- `GET /parent/me`
-- `GET /children/{id}/feed` — aggregates recent attendance + published marks + overdue fees
-- `GET /children/{id}/attendance?year=&month=` (calendar) · `…/attendance/yearly` (trend)
-- `GET /children/{id}/tests` · `…/tests/{testId}` — published **offline** tests with class avg/high/rank computed on the fly
-- `GET /children/{id}/fees` — components + payment history, **amounts in whole rupees** (parent app has no paise)
+### Endpoints (~30)
+- `POST /auth/login` (phone+password), `POST /auth/refresh`, `POST /auth/logout`; dormant `/auth/send-otp` + `/auth/verify-otp`
+- `GET /parent/me`, `PATCH /parent/me` (name/email), `PATCH /parent/me/password`
+- `GET /children/{id}/feed` — recent attendance + published marks + overdue fees
+- `GET /children/{id}/attendance` (calendar) · `/yearly` (trend)
+- `GET /children/{id}/tests` · `/tests/{id}` — published **offline** tests with class avg/high/rank
+- `GET /children/{id}/fees` — components + payment history, whole rupees on the wire
+- `GET /children/{id}/notifications` + `PATCH /notifications/{id}/read` + `POST /children/{id}/notifications/read-all`
+- `GET /children/{id}/announcements` + `PATCH /announcements/{id}/read`
+- `GET /children/{id}/timetable` — weekly schedule
+- `GET /children/{id}/report-cards` · `/report-cards/{id}`
+- `GET /children/{id}/online-tests`, `POST /…/start`, `PATCH submissions/{id}/answer`, `POST submissions/{id}/submit`, `GET /…/result` — MCQ + short-answer auto-grading
 
 ### Seed
-- Demo parent **Suresh Reddy** `+919876512345` (OTP only), linked to two real students renamed **Aarav Reddy** (Class 8-A) and **Ananya Reddy** (Class 5-A).
+- Demo parent **Suresh Reddy** `+919876512345` / password `skooly123` (pre-set in seed; mirrors admin pre-provisioning). Linked to **Aarav Reddy** (Class 8-A) and **Ananya Reddy** (Class 5-A) with realistic data across every screen.
 
-### Tests (9 new)
-- OTP send/verify, bootstrap payload, role lock (teacher token → 401), cross-tenant child → 404, unlinked-same-school child → 404, monthly attendance, marks list with rank. Full suite green.
+### Tests
+- 31 parent API tests covering auth (login/wrong-pw/conflict/dormant-OTP), profile, change-password, every read endpoint, role lock, cross-tenant 404s.
 
-### Frontend wiring (skooly-parent, `feat/wire-backend-api`)
-- New `src/lib/api.ts` typed fetch wrapper (mirrors guru), base `…/api/v1/parent`, 401 → `skooly:unauthorized`.
-- Real OTP auth in `src/lib/auth.tsx`; wired **login → otp → select-child → home**, plus **attendance, marks (+detail), fees**, and the home feed/stat tiles. Verified end-to-end in browser.
-- **Phase 2 (still mocked):** notifications, timetable, online tests, announcements, report cards, FCM device token, parent profile edit. Home's notification badge + timetable strip read mock and render empty for real children (noted in code).
+### Frontend wiring (skooly-parent)
+- All screens read from real endpoints. Auth via `src/lib/auth.tsx` (Capacitor-Preferences-backed via `src/lib/auth-storage.ts`).
+- Playwright E2E across the golden paths + screenshots in `docs/screenshots/`.
 
-### Notes / follow-ups
-- Dev CORS now allows `http://localhost:3001` (parent Vite port) in `docker-compose.yml`.
-- Pre-existing `seed_demo --reset` `ProtectedError` on a populated DB (PROTECT FKs on School) — flagged as a separate task; fresh-volume seed works.
+### Native build readiness (PR open)
+- `@capacitor/preferences` for JWT storage (NSUserDefaults / SharedPreferences on native; localStorage on web).
+- `VITE_API_BASE_URL` baked into the Capacitor bundle at build time.
+- Backend dev CORS allows `capacitor://localhost` + `https://localhost`.
+
+### What's deferred
+- **Real OTP delivery** ([86d39qahj](https://app.clickup.com/t/86d39qahj), `high`) — passwords work as the pilot path.
+- **FCM push notifications** ([86d34k8jf](https://app.clickup.com/t/86d34k8jf)) — in-app badges work today; no device-token registration yet.
+- **Sliding session refresh on app open** ([86d34k8m1](https://app.clickup.com/t/86d34k8m1)) — low urgency given 8-day access TTL in dev.
+- **Wire frontend tests into CI** ([86d34krxd](https://app.clickup.com/t/86d34krxd)) — tests pass locally; no `.github/workflows/` yet.
+- **Pilot blocker outside parent-app code:** admin UI to set/reset parent passwords ([86d3a33yh](https://app.clickup.com/t/86d3a33yh)).
+
+### Notes
+- Dev CORS allows `localhost:3001` (parent Vite), `localhost:5173` (guru), plus the two Capacitor origins.
+- Pre-existing `seed_demo --reset` `ProtectedError` on a populated DB (PROTECT FKs on School) — fresh-volume seed works.
 
 ## Module 7 — what shipped
 
