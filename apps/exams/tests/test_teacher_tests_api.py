@@ -543,7 +543,7 @@ def test_create_online_test(client: Client, world_a) -> None:
             "testDate": date.today().isoformat(),
             "mode": "online",
             "availableFrom": now.isoformat(),
-            "availableUntil": now.replace(hour=now.hour + 2).isoformat(),
+            "availableUntil": (now + timedelta(hours=2)).isoformat(),
             "durationMin": 30,
         },
         content_type="application/json",
