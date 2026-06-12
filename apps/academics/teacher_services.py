@@ -8,10 +8,12 @@ the teacher actually being assigned to the section.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import time as time_type
 from typing import Any
 
 from apps.academics.models import (
+    DayOfWeek,
     Section,
     StudentEnrollment,
     TeacherAssignment,
@@ -128,3 +130,43 @@ def list_class_students(*, teacher: Any, section_id: int, academic_year_id: int 
     # Stored roll numbers are free-text; order numerically, unknowns last.
     rows.sort(key=lambda r: (r["roll_no"] is None, r["roll_no"] or 0, r["name"]))
     return rows
+
+
+def _period_row(period: TimetablePeriod) -> dict:
+    """Shape one TimetablePeriod for the teacher timetable response."""
+    section = period.section
+    return {
+        "period": period.period_number,
+        "start_time": period.start_time.strftime("%H:%M"),
+        "end_time": period.end_time.strftime("%H:%M"),
+        "subject": period.subject.name if period.subject else "",
+        "section_id": str(section.id),
+        "section_label": f"{section.class_obj.name} - {section.name}",
+    }
+
+
+def teacher_timetable_today(*, teacher: Any) -> list[dict]:
+    """Today's periods for the teacher across all sections, ordered by start time."""
+    weekday = today_local().isoweekday()  # Mon=1 … Sat=6, matching DayOfWeek
+    periods = (
+        TimetablePeriod.objects.filter(teacher=teacher, day_of_week=weekday)
+        .select_related("section__class_obj", "subject")
+        .order_by("start_time", "period_number")
+    )
+    return [_period_row(p) for p in periods]
+
+
+def teacher_timetable_week(*, teacher: Any) -> list[dict]:
+    """The teacher's full week, grouped by day and ordered by start time."""
+    periods = (
+        TimetablePeriod.objects.filter(teacher=teacher)
+        .select_related("section__class_obj", "subject")
+        .order_by("day_of_week", "start_time", "period_number")
+    )
+    by_day: dict[int, list[dict]] = defaultdict(list)
+    for p in periods:
+        by_day[p.day_of_week].append(_period_row(p))
+    return [
+        {"day": DayOfWeek(day_value).label[:3], "periods": rows}
+        for day_value, rows in sorted(by_day.items())
+    ]
