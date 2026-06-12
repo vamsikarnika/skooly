@@ -8,16 +8,48 @@ the teacher actually being assigned to the section.
 
 from __future__ import annotations
 
+from datetime import time as time_type
 from typing import Any
 
-from apps.academics.models import Section, StudentEnrollment, TeacherAssignment
+from apps.academics.models import (
+    Section,
+    StudentEnrollment,
+    TeacherAssignment,
+    TimetablePeriod,
+)
 from apps.attendance.models import Attendance
 from apps.core.exceptions import NotFound
 from apps.core.helpers import gender_code, hhmm_local, roll_to_int, today_local
 
 
+def _fmt_period(start: time_type, end: time_type) -> str:
+    """Format a period as a readable range, e.g. "10:00 - 10:45 AM".
+    Drops the meridiem on the start when it matches the end's."""
+    s = start.strftime("%I:%M %p").lstrip("0")
+    e = end.strftime("%I:%M %p").lstrip("0")
+    if s[-2:] == e[-2:]:  # same AM/PM - show it once
+        s = s[:-3]
+    return f"{s} – {e}"  # noqa: RUF001 — en dash is intentional for the range
+
+
+def _today_schedule_by_section(*, teacher: Any) -> dict[int, str]:
+    """The teacher's earliest period today per section, as a display string.
+    Empty when the school hasn't entered a timetable — schedule stays optional."""
+    weekday = today_local().isoweekday()  # Mon=1 … Sat=6, matching DayOfWeek
+    periods = TimetablePeriod.objects.filter(
+        teacher=teacher, day_of_week=weekday
+    ).order_by("section_id", "period_number")
+    schedule: dict[int, str] = {}
+    for p in periods:
+        # First (earliest) period wins when a teacher has the section twice today.
+        if p.section_id not in schedule:
+            schedule[p.section_id] = _fmt_period(p.start_time, p.end_time)
+    return schedule
+
+
 def list_teacher_classes(*, teacher: Any, academic_year_id: int | None) -> list[dict]:
     today = today_local()
+    schedule_by_section = _today_schedule_by_section(teacher=teacher)
     assignments = (
         TeacherAssignment.objects.filter(teacher=teacher, academic_year_id=academic_year_id)
         .select_related("section__class_obj", "subject")
@@ -40,7 +72,7 @@ def list_teacher_classes(*, teacher: Any, academic_year_id: int | None) -> list[
                 "section": section.name,
                 "subject": assignment.subject.name,
                 "_subjects": [assignment.subject.name],
-                "schedule": "",
+                "schedule": schedule_by_section.get(sid, ""),
                 "enrollment": enrollment,
                 "attendance_marked": first_mark is not None,
                 "attendance_time": hhmm_local(first_mark.marked_at) if first_mark else None,
@@ -49,8 +81,17 @@ def list_teacher_classes(*, teacher: Any, academic_year_id: int | None) -> list[
             seen[sid]["_subjects"].append(assignment.subject.name)
 
     cards = []
+    attendance_class_assigned = False
     for card in seen.values():
         card["subject"] = " · ".join(card.pop("_subjects"))
+        # Mark the first class (lowest display_order) as the attendance class.
+        # This is the only place that needs to change when schools configure a
+        # different rule (homeroom section, explicit flag, etc.).
+        if not attendance_class_assigned:
+            card["is_attendance_class"] = True
+            attendance_class_assigned = True
+        else:
+            card["is_attendance_class"] = False
         cards.append(card)
     return cards
 
