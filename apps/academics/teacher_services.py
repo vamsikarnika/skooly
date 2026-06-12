@@ -8,9 +8,8 @@ the teacher actually being assigned to the section.
 
 from __future__ import annotations
 
-from typing import Any
-
 from datetime import time as time_type
+from typing import Any
 
 from apps.academics.models import (
     Section,
@@ -24,13 +23,13 @@ from apps.core.helpers import gender_code, hhmm_local, roll_to_int, today_local
 
 
 def _fmt_period(start: time_type, end: time_type) -> str:
-    """Format a period as a readable range, e.g. "10:00 – 10:45 AM".
+    """Format a period as a readable range, e.g. "10:00 - 10:45 AM".
     Drops the meridiem on the start when it matches the end's."""
     s = start.strftime("%I:%M %p").lstrip("0")
     e = end.strftime("%I:%M %p").lstrip("0")
-    if s[-2:] == e[-2:]:  # same AM/PM — show it once
+    if s[-2:] == e[-2:]:  # same AM/PM - show it once
         s = s[:-3]
-    return f"{s} – {e}"
+    return f"{s} – {e}"  # noqa: RUF001 — en dash is intentional for the range
 
 
 def _today_schedule_by_section(*, teacher: Any) -> dict[int, str]:
