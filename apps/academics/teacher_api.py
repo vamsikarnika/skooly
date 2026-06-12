@@ -6,7 +6,12 @@ from django.http import HttpRequest
 from ninja import Router
 
 from apps.academics import teacher_services
-from apps.academics.teacher_schemas import ClassStudentOut, TeacherClassOut
+from apps.academics.teacher_schemas import (
+    ClassStudentOut,
+    TeacherClassOut,
+    TeacherPeriodOut,
+    TeacherTimetableDayOut,
+)
 from apps.accounts.teacher_auth import get_teacher, teacher_jwt_auth
 
 router = Router(tags=["teacher-classes"], auth=teacher_jwt_auth, by_alias=True)
@@ -31,3 +36,13 @@ def list_class_students(request: HttpRequest, class_id: int) -> list[dict]:
         section_id=class_id,
         academic_year_id=_academic_year_id(request),
     )
+
+
+@router.get("/timetable/today", response=list[TeacherPeriodOut])
+def timetable_today(request: HttpRequest) -> list[dict]:
+    return teacher_services.teacher_timetable_today(teacher=get_teacher(request))
+
+
+@router.get("/timetable", response=list[TeacherTimetableDayOut])
+def timetable_week(request: HttpRequest) -> list[dict]:
+    return teacher_services.teacher_timetable_week(teacher=get_teacher(request))

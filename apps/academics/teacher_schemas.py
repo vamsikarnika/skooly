@@ -26,3 +26,17 @@ class ClassStudentOut(CamelSchema):
     name: str
     gender: str
     parent_phone: str = ""
+
+
+class TeacherPeriodOut(CamelSchema):
+    period: int
+    start_time: str  # "HH:MM"
+    end_time: str  # "HH:MM"
+    subject: str
+    section_id: str
+    section_label: str  # e.g. "Class 8 - A" — a teacher works across sections
+
+
+class TeacherTimetableDayOut(CamelSchema):
+    day: str  # "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat"
+    periods: list[TeacherPeriodOut]
