@@ -11,10 +11,15 @@ from apps.exams.teacher_schemas import (
     CreateTestIn,
     MarksRosterItemOut,
     QuestionOut,
+    ReportCardRosterOut,
+    ReportCardSectionOut,
+    ReportSummaryOut,
     SaveMarksIn,
     SaveMarksOut,
     SaveQuestionsIn,
     SaveQuestionsOut,
+    SaveReportCardsIn,
+    SaveReportCardsOut,
     TestOut,
     TestReportOut,
 )
@@ -108,4 +113,57 @@ def save_questions(
         academic_year_id=school.current_academic_year_id if school else None,
         questions=[q.model_dump(by_alias=False) for q in payload.questions],
         publish=payload.publish,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Report cards (class-teacher generate + publish)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/report-cards/sections", response=list[ReportCardSectionOut])
+def list_report_card_sections(request: HttpRequest) -> list[dict]:
+    school = request.auth.school  # type: ignore[attr-defined]
+    return teacher_services.list_report_card_sections(
+        teacher=get_teacher(request),
+        academic_year_id=school.current_academic_year_id if school else None,
+    )
+
+
+@router.get("/report-cards/{section_id}/reports", response=list[ReportSummaryOut])
+def list_report_card_reports(request: HttpRequest, section_id: int) -> list[dict]:
+    school = request.auth.school  # type: ignore[attr-defined]
+    return teacher_services.list_report_card_reports(
+        teacher=get_teacher(request),
+        section_id=section_id,
+        academic_year_id=school.current_academic_year_id if school else None,
+    )
+
+
+@router.get("/report-cards/{section_id}/roster", response=ReportCardRosterOut)
+def report_card_roster(
+    request: HttpRequest, section_id: int, name: str = Query(default="")  # type: ignore[assignment]
+) -> dict:
+    school = request.auth.school  # type: ignore[attr-defined]
+    return teacher_services.report_card_roster(
+        teacher=get_teacher(request),
+        section_id=section_id,
+        academic_year_id=school.current_academic_year_id if school else None,
+        name=name,
+    )
+
+
+@router.post("/report-cards/{section_id}/publish", response=SaveReportCardsOut)
+def save_report_cards(
+    request: HttpRequest, section_id: int, payload: SaveReportCardsIn
+) -> dict:
+    school = request.auth.school  # type: ignore[attr-defined]
+    return teacher_services.save_report_cards(
+        teacher=get_teacher(request),
+        section_id=section_id,
+        academic_year_id=school.current_academic_year_id if school else None,
+        name=payload.name,
+        subjects=[s.model_dump(by_alias=False) for s in payload.subjects],
+        publish=payload.publish,
+        records=[r.model_dump(by_alias=False) for r in payload.records],
     )

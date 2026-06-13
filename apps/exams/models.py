@@ -194,7 +194,10 @@ class ReportCard(TenantScopedModel):
     academic_year = models.ForeignKey(
         "schools.AcademicYear", on_delete=models.PROTECT, related_name="report_cards"
     )
-    term = models.CharField(max_length=16, choices=ReportCardTerm.choices)
+    # Free-text report name set by the teacher, e.g. "Term 1", "Unit Test 1",
+    # "Half-Yearly". The parent app renders this as the report title. Kept on a
+    # field named `term` because the parent serializer + unique key reference it.
+    term = models.CharField(max_length=60)
     generated_by = models.ForeignKey(
         "people.Teacher",
         on_delete=models.SET_NULL,
