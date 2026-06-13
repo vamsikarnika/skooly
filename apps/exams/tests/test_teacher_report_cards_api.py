@@ -190,19 +190,34 @@ def test_publish_single_student_only(client: Client, world_a) -> None:
 
 
 @pytest.mark.django_db
-def test_draft_save_preserves_already_published(client: Client, world_a) -> None:
+def test_publish_all_and_draft_leave_already_published_untouched(client: Client, world_a) -> None:
     _teacher, section = _setup(world_a)
     s1 = _enroll(world_a, section, roll=1)
     subjects = [{"name": "Maths", "maxMarks": 100}]
     # Publish first.
     _publish(client, section, world_a, name="Term 1", subjects=subjects,
              records=[{"studentId": str(s1.id), "marks": {"Maths": 80}}], publish=True)
-    # Re-save as draft → must NOT un-publish.
+    # Re-save as draft with an edit → already-published card is left untouched.
     _publish(client, section, world_a, name="Term 1", subjects=subjects,
              records=[{"studentId": str(s1.id), "marks": {"Maths": 85}}], publish=False)
     card = ReportCard.objects.all_tenants().get(student=s1, term="Term 1")
     assert card.published_at is not None
-    assert card.data_snapshot["subjects"][0]["marks"] == 85  # edit still saved
+    assert card.data_snapshot["subjects"][0]["marks"] == 80  # untouched, not 85
+
+
+@pytest.mark.django_db
+def test_republish_single_student_pushes_edit(client: Client, world_a) -> None:
+    _teacher, section = _setup(world_a)
+    s1 = _enroll(world_a, section, roll=1)
+    subjects = [{"name": "Maths", "maxMarks": 100}]
+    _publish(client, section, world_a, name="Term 1", subjects=subjects,
+             records=[{"studentId": str(s1.id), "marks": {"Maths": 80}}], publish=True)
+    # Explicit per-student re-publish with an edit → snapshot updates.
+    _publish(client, section, world_a, name="Term 1", subjects=subjects, publish=False,
+             records=[{"studentId": str(s1.id), "marks": {"Maths": 95}, "publish": True}])
+    card = ReportCard.objects.all_tenants().get(student=s1, term="Term 1")
+    assert card.published_at is not None
+    assert card.data_snapshot["subjects"][0]["marks"] == 95
 
 
 @pytest.mark.django_db
