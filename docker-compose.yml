@@ -38,7 +38,9 @@ services:
       JWT_SECRET: ${JWT_SECRET:-docker-dev-jwt-secret-change-me-please-32}
       DEBUG: "True"
       ALLOWED_HOSTS: "localhost,127.0.0.1,api,0.0.0.0"
-      CORS_ALLOWED_ORIGINS: "http://localhost:5173,http://localhost:8080,http://localhost:3000,http://localhost:3001"
+      # capacitor://localhost  → parent app on iOS (Capacitor default)
+      # https://localhost      → parent app on Android (capacitor.config sets androidScheme: "https")
+      CORS_ALLOWED_ORIGINS: "http://localhost:5173,http://localhost:8080,http://localhost:3000,http://localhost:3001,capacitor://localhost,https://localhost"
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_NAME: skooly_dev
