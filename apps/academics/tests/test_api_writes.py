@@ -160,6 +160,44 @@ def test_teacher_assignment_create_and_delete(client, admin_token_a, world_a):
 
 
 @pytest.mark.django_db
+def test_list_section_teacher_assignments(client, admin_token_a, world_a):
+    """Read endpoint returns one row per class subject, with the assigned
+    teacher filled in where an assignment exists."""
+    from apps.academics.models import SubjectClassMapping, TeacherAssignment
+
+    school = world_a["school"]
+    cls = world_a["class"]
+    section = world_a["section_a"]
+    math = SubjectFactory(school=school, name="Math")
+    science = SubjectFactory(school=school, name="Science")
+    SubjectClassMapping.objects.create(school=school, subject=math, class_obj=cls)
+    SubjectClassMapping.objects.create(school=school, subject=science, class_obj=cls)
+    teacher = TeacherFactory(school=school, phone="+918888003000")
+    TeacherAssignment.objects.create(
+        school=school,
+        teacher=teacher,
+        subject=math,
+        section=section,
+        academic_year=world_a["year"],
+    )
+
+    res = client.get(
+        f"/api/v1/sections/{section.id}/teacher-assignments",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 200, res.content
+    rows = res.json()
+    # Ordered by subject name.
+    assert [r["subjectName"] for r in rows] == ["Math", "Science"]
+    math_row = next(r for r in rows if r["subjectName"] == "Math")
+    assert math_row["teacherId"] == teacher.id
+    assert math_row["assignmentId"] is not None
+    science_row = next(r for r in rows if r["subjectName"] == "Science")
+    assert science_row["teacherId"] is None
+    assert science_row["assignmentId"] is None
+
+
+@pytest.mark.django_db
 def test_teacher_assignment_cross_tenant_404(
     client, admin_token_a, world_a, world_b
 ):
