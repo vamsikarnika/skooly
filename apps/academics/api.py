@@ -8,7 +8,12 @@ from ninja import Query, Router
 
 from apps.academics import services_write
 from apps.academics.models import Class, Section, Subject, TeacherAssignment
-from apps.academics.schemas import ClassOut, SectionOut, SubjectOut
+from apps.academics.schemas import (
+    ClassOut,
+    SectionOut,
+    SectionSubjectTeacherOut,
+    SubjectOut,
+)
 from apps.academics.schemas_in import (
     ClassCreateRequest,
     ClassUpdateRequest,
@@ -225,6 +230,44 @@ def delete_subject(request: HttpRequest, subject_id: int) -> ActionResponse:
 
 
 # ----- Teacher assignments ---------------------------------------------------
+
+@router.get(
+    "/sections/{section_id}/teacher-assignments",
+    response=list[SectionSubjectTeacherOut],
+)
+def list_section_teacher_assignments(
+    request: HttpRequest, section_id: int
+) -> list[SectionSubjectTeacherOut]:
+    """Subjects taught at this section's class level, each with its current
+    teacher assignment (if any). Drives the section's "Subject teachers" UI."""
+    school = _school(request)
+    section = get_in_tenant(Section, school, pk=section_id)
+    subjects = (
+        Subject.objects.filter(school=school, class_mappings__class_obj=section.class_obj_id)
+        .order_by("name")
+        .distinct()
+    )
+    assignments = {
+        a.subject_id: a
+        for a in TeacherAssignment.objects.filter(
+            school=school, section=section
+        ).select_related("teacher")
+    }
+    rows: list[SectionSubjectTeacherOut] = []
+    for subject in subjects:
+        assignment = assignments.get(subject.id)
+        teacher = assignment.teacher if assignment else None
+        rows.append(
+            SectionSubjectTeacherOut(
+                subject_id=subject.id,
+                subject_name=subject.name,
+                assignment_id=assignment.id if assignment else None,
+                teacher_id=teacher.id if teacher else None,
+                teacher_name=teacher.full_name if teacher else None,
+            )
+        )
+    return rows
+
 
 @router.post("/teacher-assignments", response=ActionResponse)
 def create_teacher_assignment(

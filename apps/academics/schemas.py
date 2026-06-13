@@ -29,3 +29,14 @@ class ClassOut(CamelSchema):
     display_order: int
     sections: list[SectionOut] = []
     student_count: int = 0
+
+
+class SectionSubjectTeacherOut(CamelSchema):
+    """One subject taught at a section's class level, plus its assigned
+    teacher (if any). ``assignment_id`` is the handle for unassigning."""
+
+    subject_id: int
+    subject_name: str
+    assignment_id: int | None = None
+    teacher_id: int | None = None
+    teacher_name: str | None = None
