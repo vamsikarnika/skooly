@@ -8,11 +8,19 @@ from typing import Any
 from django.db import transaction
 from django.utils import timezone
 
-from apps.academics.models import StudentEnrollment, TeacherAssignment
+from apps.academics.models import Section, StudentEnrollment, TeacherAssignment
 from apps.academics.teacher_services import assigned_section
+from apps.attendance.models import Attendance, AttendanceStatus
 from apps.core.exceptions import NotFound, ValidationFailed
-from apps.core.helpers import roll_to_int
-from apps.exams.models import MCQOption, Question, Test, TestScore, TestType
+from apps.core.helpers import roll_to_int, today_local
+from apps.exams.models import (
+    MCQOption,
+    Question,
+    ReportCard,
+    Test,
+    TestScore,
+    TestType,
+)
 
 PASS_THRESHOLD_PCT = 35  # <35% is "below pass"
 
@@ -506,3 +514,329 @@ def get_report(
         "total": len(students),
         "bands": bands,
     }
+
+
+# ---------------------------------------------------------------------------
+# Report cards — class-teacher generate + publish
+# ---------------------------------------------------------------------------
+
+
+def _grade(pct: float) -> str:
+    """AP State Board grade bands."""
+    if pct >= 91:
+        return "A1"
+    if pct >= 81:
+        return "A2"
+    if pct >= 71:
+        return "B1"
+    if pct >= 61:
+        return "B2"
+    if pct >= 51:
+        return "C1"
+    if pct >= 41:
+        return "C2"
+    if pct >= 33:
+        return "D"
+    return "E"
+
+
+def _class_teacher_section(*, teacher: Any, section_id: int, academic_year_id: int | None) -> Section:
+    """Return the section only if this teacher is its class teacher, else 404.
+    Report cards span all subjects, so only the class teacher owns them."""
+    section = Section.objects.filter(id=section_id).select_related("class_obj__academic_year").first()
+    if section is None or section.class_teacher_id != teacher.id:
+        raise NotFound("Class not found.")
+    return section
+
+
+def _attendance_pct(student_id: int) -> int:
+    """Present / total over the student's recorded attendance (year to date)."""
+    qs = Attendance.objects.filter(student_id=student_id)
+    total = qs.count()
+    if not total:
+        return 0
+    absent = qs.filter(status=AttendanceStatus.ABSENT).count()
+    return round((total - absent) / total * 100)
+
+
+def _section_student_ids(section: Section) -> list[int]:
+    return list(
+        StudentEnrollment.objects.filter(section=section, status="active").values_list(
+            "student_id", flat=True
+        )
+    )
+
+
+def list_report_card_sections(*, teacher: Any, academic_year_id: int | None) -> list[dict]:
+    sections = (
+        Section.objects.filter(
+            class_teacher=teacher, class_obj__academic_year_id=academic_year_id
+        )
+        .select_related("class_obj")
+        .order_by("class_obj__display_order", "name")
+    )
+    out = []
+    for s in sections:
+        student_ids = _section_student_ids(s)
+        report_count = (
+            ReportCard.objects.filter(
+                student_id__in=student_ids, academic_year_id=academic_year_id
+            )
+            .values("term")
+            .distinct()
+            .count()
+        )
+        out.append(
+            {
+                "section_id": str(s.id),
+                "class_name": s.class_obj.name,
+                "section": s.name,
+                "student_count": len(student_ids),
+                "report_count": report_count,
+            }
+        )
+    return out
+
+
+def list_report_card_reports(
+    *, teacher: Any, section_id: int, academic_year_id: int | None
+) -> list[dict]:
+    """History: the section's report cards grouped by name (term)."""
+    section = _class_teacher_section(
+        teacher=teacher, section_id=section_id, academic_year_id=academic_year_id
+    )
+    student_ids = _section_student_ids(section)
+    cards = ReportCard.objects.filter(
+        student_id__in=student_ids, academic_year_id=academic_year_id
+    )
+    by_name: dict[str, dict] = {}
+    for c in cards:
+        b = by_name.setdefault(
+            c.term,
+            {
+                "name": c.term,
+                "total_students": 0,
+                "published_count": 0,
+                "draft_count": 0,
+                "updated_at": None,
+            },
+        )
+        b["total_students"] += 1
+        if c.published_at is not None:
+            b["published_count"] += 1
+        else:
+            b["draft_count"] += 1
+        iso = c.updated_at.isoformat() if c.updated_at else None
+        if iso and (b["updated_at"] is None or iso > b["updated_at"]):
+            b["updated_at"] = iso
+    return sorted(by_name.values(), key=lambda r: r["updated_at"] or "", reverse=True)
+
+
+def _subjects_from_snapshot(card: ReportCard) -> list[dict]:
+    snap = card.data_snapshot or {}
+    return [
+        {"name": s["name"], "max_marks": s.get("maxMarks", 100)}
+        for s in snap.get("subjects", [])
+    ]
+
+
+def report_card_roster(
+    *, teacher: Any, section_id: int, academic_year_id: int | None, name: str | None
+) -> dict:
+    """Roster for an existing named report, or a blank roster seeded with the
+    section's most recent report's subjects (template) when creating a new one."""
+    section = _class_teacher_section(
+        teacher=teacher, section_id=section_id, academic_year_id=academic_year_id
+    )
+    enrollments = list(
+        StudentEnrollment.objects.filter(section=section, status="active").select_related("student")
+    )
+    student_ids = [e.student_id for e in enrollments]
+
+    name = (name or "").strip()
+    existing: dict[int, ReportCard] = {}
+    if name:
+        existing = {
+            c.student_id: c
+            for c in ReportCard.objects.filter(
+                student_id__in=student_ids, academic_year_id=academic_year_id, term=name
+            )
+        }
+
+    if existing:
+        subjects = _subjects_from_snapshot(next(iter(existing.values())))
+    else:
+        # Template: subjects from the section's most recent report (if any).
+        latest = (
+            ReportCard.objects.filter(
+                student_id__in=student_ids, academic_year_id=academic_year_id
+            )
+            .order_by("-generated_at", "-id")
+            .first()
+        )
+        subjects = _subjects_from_snapshot(latest) if latest else []
+
+    subject_names = [s["name"] for s in subjects]
+    students = []
+    for e in enrollments:
+        card = existing.get(e.student_id)
+        if card:
+            snap = card.data_snapshot or {}
+            saved = {s["name"]: s.get("marks") for s in snap.get("subjects", [])}
+            marks = {n: saved.get(n) for n in subject_names}
+            remark = snap.get("teacherRemark", "")
+            published = card.published_at is not None
+        else:
+            marks = dict.fromkeys(subject_names)
+            remark = ""
+            published = False
+        students.append(
+            {
+                "student_id": str(e.student_id),
+                "roll_no": roll_to_int(e.roll_number),
+                "name": e.student.full_name,
+                "attendance_pct": _attendance_pct(e.student_id),
+                "remark": remark,
+                "marks": marks,
+                "already_published": published,
+            }
+        )
+    students.sort(key=lambda r: (r["roll_no"] is None, r["roll_no"] or 0, r["name"]))
+    return {
+        "section_id": str(section.id),
+        "class_name": section.class_obj.name,
+        "section": section.name,
+        "name": name,
+        "subjects": subjects,
+        "students": students,
+    }
+
+
+def save_report_cards(
+    *,
+    teacher: Any,
+    section_id: int,
+    academic_year_id: int | None,
+    name: str,
+    subjects: list[dict],
+    publish: bool,
+    records: list[dict],
+) -> dict:
+    name = (name or "").strip()
+    if not name:
+        raise ValidationFailed("Report name is required.")
+    if len(name) > 60:
+        raise ValidationFailed("Report name is too long (max 60 characters).")
+
+    # Normalize the teacher-defined subjects: drop blanks / non-positive max.
+    norm_subjects: list[dict] = []
+    for s in subjects:
+        sname = (s.get("name") or "").strip()
+        try:
+            smax = int(s.get("max_marks") or 0)
+        except (TypeError, ValueError):
+            smax = 0
+        if sname and smax > 0:
+            norm_subjects.append({"name": sname, "max_marks": smax})
+    if not norm_subjects:
+        raise ValidationFailed("Add at least one subject with a max score.")
+
+    section = _class_teacher_section(
+        teacher=teacher, section_id=section_id, academic_year_id=academic_year_id
+    )
+    year = section.class_obj.academic_year
+    issue_date = today_local().isoformat()
+    valid_ids = set(_section_student_ids(section))
+
+    # First pass: build each student's subject grid + overall (for ranking).
+    computed = []
+    for rec in records:
+        sid = int(rec["student_id"])
+        if sid not in valid_ids:
+            continue
+        marks_in = rec.get("marks") or {}
+        subj_payload = []
+        total_marks = 0
+        total_max = 0
+        for sub in norm_subjects:
+            sname, smax = sub["name"], sub["max_marks"]
+            raw = marks_in.get(sname)
+            mark = max(0, min(smax, int(raw))) if raw is not None else None
+            sub_pct = (mark / smax * 100) if mark is not None else None
+            subj_payload.append(
+                {
+                    "name": sname,
+                    "maxMarks": smax,
+                    "marks": mark,
+                    "grade": _grade(sub_pct) if sub_pct is not None else "-",
+                }
+            )
+            if mark is not None:
+                total_marks += mark
+                total_max += smax
+        overall = round(total_marks / total_max * 100) if total_max else 0
+        computed.append(
+            {
+                "sid": sid,
+                "subjects": subj_payload,
+                "overall": overall,
+                "remark": rec.get("remark", ""),
+                # Per-student publish override (True/False/None). True is an
+                # explicit "(re)publish this student".
+                "explicit_publish": rec.get("publish"),
+            }
+        )
+
+    existing = {
+        c.student_id: c
+        for c in ReportCard.objects.filter(
+            student_id__in=[c["sid"] for c in computed], academic_year=year, term=name
+        )
+    }
+
+    total_students = len(computed)
+    now = timezone.now()
+    saved = 0
+    published_count = 0
+    with transaction.atomic():
+        for c in computed:
+            rank = sum(1 for o in computed if o["overall"] > c["overall"]) + 1
+            prior = existing.get(c["sid"])
+            prior_published = prior is not None and prior.published_at is not None
+            explicit = c["explicit_publish"] is True
+            # An already-published report is immutable except via an explicit
+            # per-student re-publish — so "Publish all" / "Save draft" leave it
+            # untouched (no re-stamp, no snapshot overwrite).
+            if prior_published and not explicit:
+                if prior.published_at is not None:
+                    published_count += 1
+                continue
+            published_at = now if (explicit or publish) else None
+            snapshot = {
+                "term": name,
+                "academicYear": year.label,
+                "issueDate": issue_date,
+                "subjects": c["subjects"],
+                "attendancePct": _attendance_pct(c["sid"]),
+                "teacherRemark": c["remark"],
+                "principalRemark": None,
+                "overallGrade": _grade(c["overall"]),
+                "overallPct": c["overall"],
+                "rank": rank,
+                "totalStudents": total_students,
+            }
+            ReportCard.objects.update_or_create(
+                student_id=c["sid"],
+                academic_year=year,
+                term=name,
+                defaults={
+                    "school": section.school,
+                    "generated_by": teacher,
+                    "data_snapshot": snapshot,
+                    "published_at": published_at,
+                },
+            )
+            saved += 1
+            if published_at is not None:
+                published_count += 1
+    return {"saved": saved, "published": published_count}

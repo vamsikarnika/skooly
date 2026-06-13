@@ -158,3 +158,73 @@ class TestReportOut(CamelSchema):
     pass_rate: int
     total: int
     bands: list[ReportBandOut]
+
+
+# ---------------------------------------------------------------------------
+# Report cards (class-teacher generate + publish)
+# ---------------------------------------------------------------------------
+
+
+class ReportCardSectionOut(CamelSchema):
+    section_id: str
+    class_name: str
+    section: str
+    student_count: int
+    report_count: int
+
+
+class ReportSummaryOut(CamelSchema):
+    name: str
+    total_students: int
+    published_count: int
+    draft_count: int
+    updated_at: str | None = None
+
+
+class RosterSubjectOut(CamelSchema):
+    name: str
+    max_marks: int
+
+
+class ReportCardRosterStudentOut(CamelSchema):
+    student_id: str
+    roll_no: int | None = None
+    name: str
+    attendance_pct: int
+    remark: str
+    marks: dict[str, int | None]  # subject name -> mark
+    already_published: bool
+
+
+class ReportCardRosterOut(CamelSchema):
+    section_id: str
+    class_name: str
+    section: str
+    name: str
+    subjects: list[RosterSubjectOut]
+    students: list[ReportCardRosterStudentOut]
+
+
+class SaveSubjectIn(CamelSchema):
+    name: str
+    max_marks: int
+
+
+class ReportCardRecordIn(CamelSchema):
+    student_id: str
+    remark: str = ""
+    marks: dict[str, int | None]
+    # Per-student publish override. None → use the batch-level `publish` flag.
+    publish: bool | None = None
+
+
+class SaveReportCardsIn(CamelSchema):
+    name: str
+    subjects: list[SaveSubjectIn]
+    publish: bool = False
+    records: list[ReportCardRecordIn]
+
+
+class SaveReportCardsOut(CamelSchema):
+    saved: int
+    published: int
