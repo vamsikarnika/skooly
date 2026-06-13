@@ -14,6 +14,7 @@ from apps.attendance.api import router as attendance_router
 from apps.attendance.parent_api import router as parent_attendance_router
 from apps.attendance.teacher_api import router as teacher_attendance_router
 from apps.communications.parent_api import router as parent_notifications_router
+from apps.communications.teacher_api import router as teacher_announcements_router
 from apps.core.exceptions import register_exception_handlers
 from apps.exams.api import router as exams_router
 from apps.exams.parent_api import router as parent_marks_router
@@ -67,6 +68,7 @@ teacher_api.add_router("/", teacher_classes_router)
 teacher_api.add_router("/", teacher_students_router)
 teacher_api.add_router("/", teacher_attendance_router)
 teacher_api.add_router("/", teacher_tests_router)
+teacher_api.add_router("/", teacher_announcements_router)
 
 register_exception_handlers(teacher_api)
 

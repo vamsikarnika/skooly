@@ -76,6 +76,38 @@ class Announcement(TenantScopedModel):
         return f"[{self.category}] {self.title} ({scope})"
 
 
+class AnnouncementTeacherRead(TenantScopedModel):
+    """Per-teacher read state for an announcement.
+
+    Announcement.is_read is parent-scoped (the v1 simplification noted above).
+    Teachers track their own read state here so marking an announcement read in
+    the teacher app never affects what parents see, and vice versa.
+    """
+
+    announcement = models.ForeignKey(
+        Announcement, on_delete=models.CASCADE, related_name="teacher_reads"
+    )
+    teacher = models.ForeignKey(
+        "people.Teacher", on_delete=models.CASCADE, related_name="announcement_reads"
+    )
+    read_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "announcement_teacher_reads"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["announcement", "teacher"],
+                name="uniq_announcement_teacher_read",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["teacher", "announcement"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"teacher={self.teacher_id} read announcement={self.announcement_id}"
+
+
 class Notification(TenantScopedModel):
     student = models.ForeignKey(
         "people.Student", on_delete=models.CASCADE, related_name="notifications"
