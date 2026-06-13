@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import timedelta
 
 import pytest
 from django.test import Client
@@ -15,6 +15,7 @@ from apps.communications.models import (
     AnnouncementCategory,
     AnnouncementTeacherRead,
 )
+from apps.core.helpers import today_local
 from apps.people.tests.factories import TeacherFactory
 
 
@@ -36,9 +37,9 @@ def _teacher(world: dict, *, section=None):  # type: ignore[no-untyped-def]
     return teacher
 
 
-def _ann(school, *, title, target_class=None, target_section=None, is_read=False):  # type: ignore[no-untyped-def]
+def _ann(school, *, title, on_date=None, target_class=None, target_section=None, is_read=False):  # type: ignore[no-untyped-def]
     return Announcement.objects.create(
-        school=school, title=title, body="b", date=date(2026, 5, 20),
+        school=school, title=title, body="b", date=on_date or today_local(),
         category=AnnouncementCategory.SCHOOL,
         target_class=target_class, target_section=target_section, is_read=is_read,
     )
@@ -128,6 +129,44 @@ def test_mark_read_cross_tenant_404(client: Client, world_a, world_b) -> None:
         f"/api/v1/teacher/announcements/{other.id}/read", **_auth(world_a["teacher_user"])
     )
     assert res.status_code == 404
+
+
+@pytest.mark.django_db
+def test_defaults_to_last_month(client: Client, world_a) -> None:
+    _teacher(world_a)
+    today = today_local()
+    _ann(world_a["school"], title="recent", on_date=today - timedelta(days=10))
+    _ann(world_a["school"], title="old", on_date=today - timedelta(days=60))
+
+    res = client.get("/api/v1/teacher/announcements", **_auth(world_a["teacher_user"]))
+    assert res.status_code == 200, res.content
+    titles = {a["title"] for a in res.json()}
+    assert titles == {"recent"}
+
+
+@pytest.mark.django_db
+def test_months_window_widens_range(client: Client, world_a) -> None:
+    _teacher(world_a)
+    today = today_local()
+    _ann(world_a["school"], title="recent", on_date=today - timedelta(days=10))
+    _ann(world_a["school"], title="old", on_date=today - timedelta(days=60))
+
+    res = client.get("/api/v1/teacher/announcements?months=3", **_auth(world_a["teacher_user"]))
+    assert res.status_code == 200, res.content
+    titles = {a["title"] for a in res.json()}
+    assert titles == {"recent", "old"}
+
+
+@pytest.mark.django_db
+def test_invalid_months_falls_back_to_one(client: Client, world_a) -> None:
+    _teacher(world_a)
+    today = today_local()
+    _ann(world_a["school"], title="old", on_date=today - timedelta(days=60))
+
+    # 24 is not an allowed window → falls back to 1 month → old excluded.
+    res = client.get("/api/v1/teacher/announcements?months=24", **_auth(world_a["teacher_user"]))
+    assert res.status_code == 200, res.content
+    assert res.json() == []
 
 
 @pytest.mark.django_db

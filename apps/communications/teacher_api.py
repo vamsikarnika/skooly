@@ -10,17 +10,23 @@ from __future__ import annotations
 
 from typing import Any
 
+from dateutil.relativedelta import relativedelta
 from django.db.models import Q
 from django.http import HttpRequest
-from ninja import Router
+from ninja import Query, Router
 
 from apps.academics.models import TeacherAssignment
 from apps.accounts.teacher_auth import get_teacher, teacher_jwt_auth
 from apps.communications.models import Announcement, AnnouncementTeacherRead
 from apps.core.exceptions import NotFound
+from apps.core.helpers import today_local
 from apps.core.schemas import ActionResponse, CamelSchema
 
 router = Router(tags=["teacher-announcements"], auth=teacher_jwt_auth, by_alias=True)
+
+# Allowed look-back windows in months. Anything else falls back to 1; capped
+# at 12 so the list never grows unbounded.
+ALLOWED_MONTHS = (1, 3, 6, 12)
 
 
 class AnnouncementOut(CamelSchema):
@@ -59,13 +65,15 @@ def _visible_q(class_ids: list[int], section_ids: list[int]) -> Q:
 
 
 @router.get("/announcements", response=list[AnnouncementOut])
-def list_announcements(request: HttpRequest) -> list[dict]:
+def list_announcements(request: HttpRequest, months: int = Query(1)) -> list[dict]:
     teacher = get_teacher(request)
+    months = months if months in ALLOWED_MONTHS else 1
+    cutoff = today_local() - relativedelta(months=months)
     class_ids, section_ids = _teacher_scope(teacher, _academic_year_id(request))
     rows = list(
-        Announcement.objects.filter(_visible_q(class_ids, section_ids)).order_by("-date", "-id")[
-            :50
-        ]
+        Announcement.objects.filter(_visible_q(class_ids, section_ids), date__gte=cutoff).order_by(
+            "-date", "-id"
+        )[:50]
     )
     read_ids = set(
         AnnouncementTeacherRead.objects.filter(
