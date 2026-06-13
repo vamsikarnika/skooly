@@ -775,9 +775,28 @@ def save_report_cards(
                 total_marks += mark
                 total_max += smax
         overall = round(total_marks / total_max * 100) if total_max else 0
+        # Effective publish: a per-record flag wins over the batch default, so a
+        # teacher can publish one student or all at once.
+        rec_publish = rec.get("publish")
+        effective_publish = bool(publish if rec_publish is None else rec_publish)
         computed.append(
-            {"sid": sid, "subjects": subj_payload, "overall": overall, "remark": rec.get("remark", "")}
+            {
+                "sid": sid,
+                "subjects": subj_payload,
+                "overall": overall,
+                "remark": rec.get("remark", ""),
+                "publish": effective_publish,
+            }
         )
+
+    # Existing cards for this report — used to preserve an already-published
+    # card when a later save isn't publishing it (no accidental un-publish).
+    existing = {
+        c.student_id: c
+        for c in ReportCard.objects.filter(
+            student_id__in=[c["sid"] for c in computed], academic_year=year, term=name
+        )
+    }
 
     total_students = len(computed)
     now = timezone.now()
@@ -786,6 +805,12 @@ def save_report_cards(
     with transaction.atomic():
         for c in computed:
             rank = sum(1 for o in computed if o["overall"] > c["overall"]) + 1
+            prior = existing.get(c["sid"])
+            if c["publish"]:
+                published_at = now
+            else:
+                # Not publishing now → keep whatever state the card already had.
+                published_at = prior.published_at if prior else None
             snapshot = {
                 "term": name,
                 "academicYear": year.label,
@@ -807,10 +832,10 @@ def save_report_cards(
                     "school": section.school,
                     "generated_by": teacher,
                     "data_snapshot": snapshot,
-                    "published_at": now if publish else None,
+                    "published_at": published_at,
                 },
             )
             saved += 1
-            if publish:
+            if published_at is not None:
                 published_count += 1
     return {"saved": saved, "published": published_count}

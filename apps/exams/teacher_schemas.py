@@ -214,6 +214,8 @@ class ReportCardRecordIn(CamelSchema):
     student_id: str
     remark: str = ""
     marks: dict[str, int | None]
+    # Per-student publish override. None → use the batch-level `publish` flag.
+    publish: bool | None = None
 
 
 class SaveReportCardsIn(CamelSchema):
