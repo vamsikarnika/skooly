@@ -5,7 +5,7 @@ Cheapest, low-ops production setup:
 ```
                         Cloudflare (DNS + edge TLS, free)
             ┌───────────────────────────┬─────────────────────────┐
-   app.smartskool.in                api.smartskool.in
+   www.smartskool.in                api.smartskool.in
    (Cloudflare Worker — SSR)        (Cloudflare Tunnel, outbound)
    skooly-stride, free tier                 │
                                      ┌───────▼────────┐  small VM (Hetzner ~$4/mo)
@@ -68,12 +68,12 @@ npm run deploy            # vite build (prod) + wrangler deploy
 
 First time, authenticate wrangler (`npx wrangler login`) and add the custom domain:
 Cloudflare dashboard → Workers & Pages → your worker → **Custom Domains** →
-add `app.smartskool.in` (and optionally redirect root `smartskool.in` → `app.`).
+add `www.smartskool.in` (and a redirect rule for root `smartskool.in` → `www.`).
 
 ## 4. First admin (no demo data in prod)
 
 `SKOOLY_SEED_DEMO=false`, so the DB starts empty. Create the first school + admin once
-via the signup API (then log in at app.smartskool.in):
+via the signup API (then log in at www.smartskool.in):
 
 ```bash
 curl -X POST https://api.smartskool.in/api/v1/auth/signup \
