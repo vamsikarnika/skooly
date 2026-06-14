@@ -31,8 +31,10 @@ case "$1" in
     exec python manage.py runserver 0.0.0.0:8000
     ;;
   gunicorn)
+    echo "[entrypoint] collecting static files…"
+    python manage.py collectstatic --noinput
     echo "[entrypoint] starting gunicorn"
-    exec gunicorn config.wsgi:application -b 0.0.0.0:8000 --workers 3
+    exec gunicorn config.wsgi:application -b 0.0.0.0:8000 --workers "${GUNICORN_WORKERS:-3}"
     ;;
   *)
     echo "[entrypoint] exec: $*"
