@@ -87,3 +87,19 @@ curl -X POST https://api.smartskool.in/api/v1/auth/signup \
 - **Logs:** `docker compose -f docker-compose.prod.yml logs -f api`
 - **DB backups:** Neon keeps automated backups + PITR — nothing to run.
 - ⚠️ **Never** run `docker compose down -v` — though with Neon the DB isn't on this box anyway.
+
+## Continuous deploy (GitHub Actions)
+
+Both repos auto-deploy via `.github/workflows/deploy.yml`:
+
+- **Backend (skooly):** after **CI** passes on `main`, SSHes to the VM and runs `deploy.sh`. Repo secrets:
+  - `VM_HOST` — VM public IP / hostname
+  - `VM_USER` — SSH user (e.g. `deploy`)
+  - `VM_SSH_KEY` — private key whose public half is in the VM's `~/.ssh/authorized_keys`
+  - `VM_SSH_PORT` — optional (default `22`)
+  - `VM_DEPLOY_DIR` — path to the `deployment/` dir on the VM (e.g. `/home/deploy/skooly/deployment`)
+- **Frontend (skooly-stride):** on push to `rebrand`, type-checks + `wrangler deploy`. Repo secrets:
+  - `CLOUDFLARE_API_TOKEN` — token with **Edit Workers** permission
+  - `CLOUDFLARE_ACCOUNT_ID`
+
+> SSH note: with the tunnel, the VM exposes only port 22. Keep key-only auth (no passwords); optionally put SSH behind Cloudflare Access later to drop the public SSH surface entirely.

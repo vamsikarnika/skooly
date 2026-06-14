@@ -1,0 +1,35 @@
+name: Deploy
+
+# Deploys the backend to the VM after CI (lint + tests) passes on main.
+# Gating on CI means a red build never reaches production. Also runnable
+# manually from the Actions tab.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Manual runs always proceed; automatic runs only when CI succeeded.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          port: ${{ secrets.VM_SSH_PORT || '22' }}
+          script_stop: true
+          # deploy.sh: git pull + docker compose up -d --build (migrate +
+          # collectstatic run on api start). VM_DEPLOY_DIR = the deployment/ dir.
+          script: |
+            cd ${{ secrets.VM_DEPLOY_DIR }}
+            ./deploy.sh
