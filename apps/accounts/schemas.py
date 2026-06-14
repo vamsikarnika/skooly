@@ -98,3 +98,38 @@ class ResetPasswordRequest(CamelSchema):
 class GenericMessageResponse(CamelSchema):
     success: bool = True
     message: str
+
+
+# ---------- Admin user management ----------
+
+
+class AdminUserOut(CamelSchema):
+    id: int
+    first_name: str
+    last_name: str
+    full_name: str
+    phone: str
+    email: str
+    is_active: bool
+    last_login_at: datetime | None = None
+    is_current: bool = False
+
+
+class CreateAdminRequest(CamelSchema):
+    first_name: str
+    last_name: str = ""
+    phone: str
+    email: str = ""
+
+
+class CreateAdminResult(CamelSchema):
+    user: AdminUserOut
+    # Plaintext one-time password to share with the new admin (no email infra).
+    generated_password: str
+
+
+class UpdateAdminRequest(CamelSchema):
+    first_name: str | None = None
+    last_name: str | None = None
+    email: str | None = None
+    is_active: bool | None = None
