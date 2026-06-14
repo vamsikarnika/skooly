@@ -567,6 +567,27 @@ def _section_student_ids(section: Section) -> list[int]:
     )
 
 
+def section_report_summary(section: Section, academic_year_id: int | None) -> dict:
+    """Report-card status for one section: roll size + how many distinct
+    reports (terms) exist this year. Shared by the teacher and admin APIs."""
+    student_ids = _section_student_ids(section)
+    report_count = (
+        ReportCard.objects.filter(
+            student_id__in=student_ids, academic_year_id=academic_year_id
+        )
+        .values("term")
+        .distinct()
+        .count()
+    )
+    return {
+        "section_id": str(section.id),
+        "class_name": section.class_obj.name,
+        "section": section.name,
+        "student_count": len(student_ids),
+        "report_count": report_count,
+    }
+
+
 def list_report_card_sections(*, teacher: Any, academic_year_id: int | None) -> list[dict]:
     sections = (
         Section.objects.filter(
@@ -575,27 +596,7 @@ def list_report_card_sections(*, teacher: Any, academic_year_id: int | None) -> 
         .select_related("class_obj")
         .order_by("class_obj__display_order", "name")
     )
-    out = []
-    for s in sections:
-        student_ids = _section_student_ids(s)
-        report_count = (
-            ReportCard.objects.filter(
-                student_id__in=student_ids, academic_year_id=academic_year_id
-            )
-            .values("term")
-            .distinct()
-            .count()
-        )
-        out.append(
-            {
-                "section_id": str(s.id),
-                "class_name": s.class_obj.name,
-                "section": s.name,
-                "student_count": len(student_ids),
-                "report_count": report_count,
-            }
-        )
-    return out
+    return [section_report_summary(s, academic_year_id) for s in sections]
 
 
 def list_report_card_reports(
@@ -643,11 +644,18 @@ def _subjects_from_snapshot(card: ReportCard) -> list[dict]:
 def report_card_roster(
     *, teacher: Any, section_id: int, academic_year_id: int | None, name: str | None
 ) -> dict:
-    """Roster for an existing named report, or a blank roster seeded with the
-    section's most recent report's subjects (template) when creating a new one."""
     section = _class_teacher_section(
         teacher=teacher, section_id=section_id, academic_year_id=academic_year_id
     )
+    return roster_for_section(section=section, academic_year_id=academic_year_id, name=name)
+
+
+def roster_for_section(
+    *, section: Section, academic_year_id: int | None, name: str | None
+) -> dict:
+    """Roster for an existing named report, or a blank roster seeded with the
+    section's most recent report's subjects (template) when creating a new one.
+    Shared by the teacher and admin APIs."""
     enrollments = list(
         StudentEnrollment.objects.filter(section=section, status="active").select_related("student")
     )
@@ -722,13 +730,37 @@ def save_report_cards(
     publish: bool,
     records: list[dict],
 ) -> dict:
+    section = _class_teacher_section(
+        teacher=teacher, section_id=section_id, academic_year_id=academic_year_id
+    )
+    return save_report_cards_for_section(
+        section=section,
+        name=name,
+        subjects=subjects,
+        publish=publish,
+        records=records,
+        generated_by=teacher,
+    )
+
+
+def save_report_cards_for_section(
+    *,
+    section: Section,
+    name: str,
+    subjects: list[dict],
+    publish: bool,
+    records: list[dict],
+    generated_by: Any = None,
+) -> dict:
+    """Persist/publish a section's report cards. Shared by the teacher and admin
+    APIs; ``generated_by`` is the Teacher when a teacher saves, else None."""
     name = (name or "").strip()
     if not name:
         raise ValidationFailed("Report name is required.")
     if len(name) > 60:
         raise ValidationFailed("Report name is too long (max 60 characters).")
 
-    # Normalize the teacher-defined subjects: drop blanks / non-positive max.
+    # Normalize the subjects: drop blanks / non-positive max.
     norm_subjects: list[dict] = []
     for s in subjects:
         sname = (s.get("name") or "").strip()
@@ -741,9 +773,6 @@ def save_report_cards(
     if not norm_subjects:
         raise ValidationFailed("Add at least one subject with a max score.")
 
-    section = _class_teacher_section(
-        teacher=teacher, section_id=section_id, academic_year_id=academic_year_id
-    )
     year = section.class_obj.academic_year
     issue_date = today_local().isoformat()
     valid_ids = set(_section_student_ids(section))
@@ -831,7 +860,7 @@ def save_report_cards(
                 term=name,
                 defaults={
                     "school": section.school,
-                    "generated_by": teacher,
+                    "generated_by": generated_by,
                     "data_snapshot": snapshot,
                     "published_at": published_at,
                 },

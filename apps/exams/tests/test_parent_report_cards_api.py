@@ -92,6 +92,23 @@ def test_list_orders_newest_first(client: Client, world_a) -> None:
 
 
 @pytest.mark.django_db
+def test_pdf_url_only_after_admin_publishes(client: Client, world_a) -> None:
+    user, student = _parent_with_child(world_a)
+    card = _card(world_a["school"], student, world_a["year"], term=ReportCardTerm.TERM_2)
+    # Admin generated a PDF but hasn't published it yet → parent sees no link.
+    card.pdf_url = "http://media.test/report-cards/1.pdf"
+    card.save(update_fields=["pdf_url"])
+    res = client.get(f"/api/v1/parent/children/{student.id}/report-cards", **_auth(user))
+    assert res.json()[0]["pdfUrl"] is None
+
+    # Admin publishes the PDF → parent now gets the link.
+    card.pdf_published_at = timezone.now()
+    card.save(update_fields=["pdf_published_at"])
+    res = client.get(f"/api/v1/parent/children/{student.id}/report-cards", **_auth(user))
+    assert res.json()[0]["pdfUrl"] == "http://media.test/report-cards/1.pdf"
+
+
+@pytest.mark.django_db
 def test_detail_returns_snapshot(client: Client, world_a) -> None:
     user, student = _parent_with_child(world_a)
     card = _card(world_a["school"], student, world_a["year"], term=ReportCardTerm.TERM_2)
