@@ -78,6 +78,11 @@ DATABASES = {
         "PASSWORD": config("DB_PASSWORD", default="skooly"),
         "HOST": config("DB_HOST", default="localhost"),
         "PORT": config("DB_PORT", default="5432"),
+        # Managed Postgres (Neon) requires TLS — set DB_SSLMODE=require in prod.
+        # "prefer" is safe for local Postgres (uses SSL if offered, else not).
+        "OPTIONS": {"sslmode": config("DB_SSLMODE", default="prefer")},
+        # Reuse connections across requests (helps when DB is remote, e.g. Neon).
+        "CONN_MAX_AGE": config("DB_CONN_MAX_AGE", default=0, cast=int),
     }
 }
 
