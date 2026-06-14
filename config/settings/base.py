@@ -38,6 +38,9 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    # Serves collected static files (admin, /api/v1/docs assets) directly from
+    # the app process — no separate static server needed. No-op in dev.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -141,9 +144,12 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_ALWAYS_EAGER = config("CELERY_TASK_ALWAYS_EAGER", default=False, cast=bool)
 
 # Redis cache
+# Cache backend is env-driven. Prod can run without Redis by setting
+# CACHE_BACKEND to LocMem (in-process). Nothing in the app relies on a shared
+# cache yet, so this is safe; flip back to Redis when one is justified.
 CACHES = {
     "default": {
-        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "BACKEND": config("CACHE_BACKEND", default="django.core.cache.backends.redis.RedisCache"),
         "LOCATION": config("REDIS_URL", default="redis://localhost:6379/0"),
     }
 }
@@ -156,24 +162,28 @@ GUPSHUP_SOURCE_NUMBER = config("GUPSHUP_SOURCE_NUMBER", default="")
 # OTP / SMS
 MSG91_AUTH_KEY = config("MSG91_AUTH_KEY", default="")
 
-# Storage
+# Storage. Media → Cloudflare R2 (S3) when USE_R2, else local disk. Static
+# files default to plain storage here (dev-safe); prod swaps in WhiteNoise's
+# compressed + hashed storage (see prod.py).
 USE_R2 = config("USE_R2", default=False, cast=bool)
-if USE_R2:
-    STORAGES = {
-        "default": {
-            "BACKEND": "storages.backends.s3.S3Storage",
-            "OPTIONS": {
-                "access_key": config("R2_ACCESS_KEY"),
-                "secret_key": config("R2_SECRET_KEY"),
-                "bucket_name": config("R2_BUCKET"),
-                "endpoint_url": config("R2_ENDPOINT"),
-                "signature_version": "s3v4",
-            },
-        },
-        "staticfiles": {
-            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+_media_storage = (
+    {
+        "BACKEND": "storages.backends.s3.S3Storage",
+        "OPTIONS": {
+            "access_key": config("R2_ACCESS_KEY"),
+            "secret_key": config("R2_SECRET_KEY"),
+            "bucket_name": config("R2_BUCKET"),
+            "endpoint_url": config("R2_ENDPOINT"),
+            "signature_version": "s3v4",
         },
     }
+    if USE_R2
+    else {"BACKEND": "django.core.files.storage.FileSystemStorage"}
+)
+STORAGES = {
+    "default": _media_storage,
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+}
 
 # Sentry
 SENTRY_DSN = config("SENTRY_DSN", default="")

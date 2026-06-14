@@ -14,4 +14,9 @@ SECURE_HSTS_PRELOAD = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"
 
+# Serve static via WhiteNoise with compression + content hashing (long-cache).
+STORAGES["staticfiles"] = {
+    "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+}
+
 TENANT_USE_POSTGRES_RLS = True
