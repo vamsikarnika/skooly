@@ -467,3 +467,48 @@ def get_permissions(user: User) -> list[str]:
 
 def check_user_password(user: User, raw: str) -> bool:
     return check_password(raw, user.password)
+
+
+# Unambiguous alphabet (no O/0, I/l/1) for a password an admin reads aloud /
+# copies to share out-of-band.
+_PW_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
+
+
+def generate_password(length: int = 10) -> str:
+    return "".join(secrets.choice(_PW_ALPHABET) for _ in range(length))
+
+
+@transaction.atomic
+def create_admin_user(
+    *, school: School, first_name: str, last_name: str, phone: str, email: str
+) -> tuple[User, str]:
+    """Provision a new admin for the school with an auto-generated password.
+
+    Access is controlled — only an existing admin creates accounts (enforced at
+    the API layer). Returns the user and the plaintext password to share; the
+    new admin can change it later.
+    """
+    first_name = first_name.strip()
+    if not first_name:
+        raise ValidationFailed("First name is required.")
+    normalized = normalize_in_phone(phone)
+    if len(normalized) != 13:
+        raise ValidationFailed("Enter a valid 10-digit phone number.")
+    if User.objects.filter(phone=normalized).exists():
+        raise Conflict("An account already exists with that phone number.")
+    email = (email or "").strip()
+    if email and User.objects.filter(school=school, email__iexact=email).exists():
+        raise Conflict("An account already exists with that email at this school.")
+
+    password = generate_password()
+    with use_school(school):
+        user = User.objects.create_user(
+            phone=normalized,
+            password=password,
+            school=school,
+            role=Role.ADMIN,
+            first_name=first_name,
+            last_name=last_name.strip(),
+            email=email,
+        )
+    return user, password
