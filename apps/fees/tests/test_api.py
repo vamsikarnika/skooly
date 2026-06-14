@@ -669,3 +669,37 @@ def test_no_floats_in_money_fields():
         assert isinstance(
             field, PositiveBigIntegerField
         ), f"{cls_name}.{field_name} must be PositiveBigIntegerField, got {type(field).__name__}"
+
+
+@pytest.mark.django_db
+def test_structure_detail_includes_section_status(client, admin_token_a, world_a):
+    """Detail endpoint reports per-section apply status; list endpoint omits it."""
+    student = StudentFactory(school=world_a["school"], admission_number="SS1")
+    _enroll(world_a, student)  # section_a
+    sid = client.post(
+        "/api/v1/fee-structures",
+        data=_make_structure(world_a),
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    ).json()["id"]
+
+    # Apply to section A only.
+    client.post(
+        f"/api/v1/fee-structures/{sid}/apply",
+        data={"sectionIds": [world_a["section_a"].id]},
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+
+    res = client.get(
+        f"/api/v1/fee-structures/{sid}", HTTP_AUTHORIZATION=f"Bearer {admin_token_a}"
+    )
+    assert res.status_code == 200, res.content
+    secs = {s["name"]: s for s in res.json()["sections"]}
+    assert secs["A"]["studentCount"] == 1
+    assert secs["A"]["appliedCount"] == 1
+    assert secs["B"]["appliedCount"] == 0
+
+    # List endpoint stays light (no per-section status).
+    lst = client.get("/api/v1/fee-structures", HTTP_AUTHORIZATION=f"Bearer {admin_token_a}")
+    assert lst.json()[0]["sections"] == []
