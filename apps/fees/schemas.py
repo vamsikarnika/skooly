@@ -34,6 +34,16 @@ class FeeStructureCreateRequest(CamelSchema):
     components: list[FeeComponentIn] = Field(min_length=1)
 
 
+class FeeSectionStatusOut(CamelSchema):
+    """How far a structure has been applied to one section of its class."""
+
+    section_id: int
+    name: str
+    class_teacher_name: str | None = None
+    student_count: int
+    applied_count: int
+
+
 class FeeStructureOut(CamelSchema):
     id: int
     name: str
@@ -43,6 +53,8 @@ class FeeStructureOut(CamelSchema):
     class_name: str
     applied_at: datetime | None
     components: list[FeeComponentOut]
+    # Populated only on the detail endpoint (per-section apply status).
+    sections: list[FeeSectionStatusOut] = []
 
 
 # --- Student fees -----------------------------------------------------------

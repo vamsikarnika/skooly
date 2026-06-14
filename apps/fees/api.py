@@ -7,6 +7,7 @@ from datetime import date as date_type
 from django.http import HttpRequest
 from ninja import Query, Router
 
+from apps.academics.models import Section, StudentEnrollment
 from apps.accounts.auth import jwt_auth
 from apps.accounts.models import Role
 from apps.core.exceptions import Forbidden, NotFound
@@ -57,7 +58,41 @@ def _school(request: HttpRequest):  # type: ignore[no-untyped-def]
 
 # --- Serialization helpers --------------------------------------------------
 
-def _structure_to_dict(structure: FeeStructure) -> dict:
+def _section_statuses(structure: FeeStructure) -> list[dict]:
+    """Per-section apply status for the structure's class: how many active
+    students each section has, and how many already have this structure."""
+    sections = (
+        Section.objects.filter(school_id=structure.school_id, class_obj_id=structure.class_obj_id)
+        .select_related("class_teacher")
+        .order_by("name")
+    )
+    out = []
+    for s in sections:
+        student_count = StudentEnrollment.objects.filter(section=s, status="active").count()
+        applied_count = (
+            StudentFee.objects.filter(
+                fee_structure=structure,
+                student__enrollments__section=s,
+                student__enrollments__status="active",
+            )
+            .values("student_id")
+            .distinct()
+            .count()
+        )
+        teacher = s.class_teacher
+        out.append(
+            {
+                "section_id": s.id,
+                "name": s.name,
+                "class_teacher_name": teacher.full_name if teacher else None,
+                "student_count": student_count,
+                "applied_count": applied_count,
+            }
+        )
+    return out
+
+
+def _structure_to_dict(structure: FeeStructure, *, include_sections: bool = False) -> dict:
     return {
         "id": structure.id,
         "name": structure.name,
@@ -66,6 +101,7 @@ def _structure_to_dict(structure: FeeStructure) -> dict:
         "class_id": structure.class_obj_id,
         "class_name": structure.class_obj.name,
         "applied_at": structure.applied_at,
+        "sections": _section_statuses(structure) if include_sections else [],
         "components": [
             {
                 "id": c.id,
@@ -202,7 +238,7 @@ def get_structure(request: HttpRequest, structure_id: int) -> dict:
     )
     if structure is None:
         raise NotFound("Fee structure not found.")
-    return _structure_to_dict(structure)
+    return _structure_to_dict(structure, include_sections=True)
 
 
 @router.post("/fee-structures/{structure_id}/apply", response=ApplyStructureResponse)
