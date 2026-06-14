@@ -211,6 +211,10 @@ class ReportCard(TenantScopedModel):
     # exact shape the parent app consumes.
     data_snapshot = models.JSONField(default=dict)
     pdf_url = models.URLField(blank=True)
+    # Admin-generated branded PDF is optional and separate from the teacher's
+    # score publish (``published_at``). Parents only see the PDF download once
+    # the admin publishes it; null = generated/preview-only or never made.
+    pdf_published_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
         db_table = "report_cards"

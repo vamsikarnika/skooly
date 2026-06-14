@@ -25,3 +25,4 @@ ignore = [
 "**/migrations/*" = ["E501", "N806"]
 "config/settings/*" = ["F405", "F403", "S104"]
 "apps/fees/receipt_pdf.py" = ["E501"]  # long HTML strings — awkward to wrap
+"apps/exams/report_card_pdf.py" = ["E501"]  # long HTML strings — awkward to wrap

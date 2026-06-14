@@ -11,17 +11,25 @@ from ninja import Query, Router
 
 from apps.academics.models import Section
 from apps.accounts.auth import jwt_auth
-from apps.core.exceptions import NotFound
+from apps.accounts.models import Role
+from apps.core.exceptions import Forbidden, NotFound
 from apps.core.helpers import get_in_tenant
 from apps.core.pagination import paginate
-from apps.exams import services
+from apps.exams import admin_report_services, services, teacher_services
 from apps.exams.models import Test
 from apps.exams.schemas import (
+    AdminReportCardOut,
+    GenerateReportCardsIn,
+    GenerateReportCardsOut,
+    PublishReportCardsIn,
+    PublishReportCardsOut,
+    ReportTermOut,
     StudentScoresHistoryOut,
     TestDetailOut,
     TestListOut,
     TestSummaryOut,
 )
+from apps.exams.teacher_schemas import ReportCardSectionOut
 from apps.people.models import Student
 
 router = Router(tags=["exams"], auth=jwt_auth, by_alias=True)
@@ -32,6 +40,11 @@ def _school(request: HttpRequest):  # type: ignore[no-untyped-def]
     if school is None:
         raise NotFound("Current user has no school.")
     return school
+
+
+def _require_admin(request: HttpRequest) -> None:
+    if request.auth.role != Role.ADMIN:  # type: ignore[attr-defined]
+        raise Forbidden("Admin role required.")
 
 
 @router.get("/tests", response=TestListOut)
@@ -103,3 +116,62 @@ def student_scores(
     return services.student_scores_history(
         school=school, student=student, from_date=fd, to_date=td
     )
+
+
+# ---------------------------------------------------------------------------
+# Report cards (admin). Scores come from the teacher's publish; the admin reads
+# them across every section, renders a branded PDF (optionally with a per-
+# student principal remark), and publishes that PDF to parents. The PDF is
+# additive — parents already see the raw scores once the teacher publishes.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/report-cards/sections", response=list[ReportCardSectionOut])
+def report_card_sections(request: HttpRequest) -> list[dict]:
+    school = _school(request)
+    year_id = school.current_academic_year_id
+    sections = (
+        Section.objects.filter(school=school, class_obj__academic_year_id=year_id)
+        .select_related("class_obj")
+        .order_by("class_obj__display_order", "name")
+    )
+    return [teacher_services.section_report_summary(s, year_id) for s in sections]
+
+
+@router.get("/report-cards/{section_id}/terms", response=list[ReportTermOut])
+def report_card_terms(request: HttpRequest, section_id: int) -> list[dict]:
+    school = _school(request)
+    section = get_in_tenant(Section, school, pk=section_id)
+    return admin_report_services.list_terms(section)
+
+
+@router.get("/report-cards/{section_id}/cards", response=list[AdminReportCardOut])
+def report_card_cards(
+    request: HttpRequest,
+    section_id: int,
+    term: str = Query(...),  # type: ignore[assignment]
+) -> list[dict]:
+    school = _school(request)
+    section = get_in_tenant(Section, school, pk=section_id)
+    return admin_report_services.cards_for_section(section, term)
+
+
+@router.post("/report-cards/{section_id}/generate", response=GenerateReportCardsOut)
+def generate_report_cards(
+    request: HttpRequest, section_id: int, payload: GenerateReportCardsIn
+) -> dict:
+    _require_admin(request)
+    school = _school(request)
+    section = get_in_tenant(Section, school, pk=section_id)
+    remarks = {r.student_id: r.principal_remark for r in payload.remarks}
+    return admin_report_services.generate_pdfs(section, payload.term, remarks)
+
+
+@router.post("/report-cards/{section_id}/publish", response=PublishReportCardsOut)
+def publish_report_cards(
+    request: HttpRequest, section_id: int, payload: PublishReportCardsIn
+) -> dict:
+    _require_admin(request)
+    school = _school(request)
+    section = get_in_tenant(Section, school, pk=section_id)
+    return admin_report_services.publish_pdfs(section, payload.term)

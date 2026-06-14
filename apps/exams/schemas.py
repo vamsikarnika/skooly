@@ -95,3 +95,58 @@ class StudentScoresHistoryOut(CamelSchema):
     from_date: date
     to_date: date
     by_subject: list[SubjectScoresOut]
+
+
+# ----- Admin report cards ----------------------------------------------------
+
+
+class ReportTermOut(CamelSchema):
+    term: str
+    card_count: int
+    pdf_published_count: int
+
+
+class AdminReportSubjectOut(CamelSchema):
+    name: str
+    max_marks: int
+    marks: int | None = None
+    grade: str
+
+
+class AdminReportCardOut(CamelSchema):
+    card_id: int
+    student_id: str
+    roll_no: int | None = None
+    name: str
+    subjects: list[AdminReportSubjectOut]
+    overall_pct: int
+    overall_grade: str
+    rank: int | None = None
+    total_students: int
+    attendance_pct: int
+    teacher_remark: str
+    principal_remark: str
+    pdf_url: str | None = None
+    pdf_published: bool
+
+
+class GenerateRemarkIn(CamelSchema):
+    student_id: str
+    principal_remark: str = ""
+
+
+class GenerateReportCardsIn(CamelSchema):
+    term: str
+    remarks: list[GenerateRemarkIn] = []
+
+
+class PublishReportCardsIn(CamelSchema):
+    term: str
+
+
+class GenerateReportCardsOut(CamelSchema):
+    generated: int
+
+
+class PublishReportCardsOut(CamelSchema):
+    published: int

@@ -158,12 +158,16 @@ class ReportCardOut(CamelSchema):
     overall_pct: int
     rank: int | None = None
     total_students: int
+    # Branded PDF, only once the admin has published it (optional per school).
+    pdf_url: str | None = None
 
 
 def _serialize_card(card: ReportCard) -> dict:
-    """Pull the rendered payload from the immutable snapshot and stamp the id."""
+    """Pull the rendered payload from the immutable snapshot and stamp the id.
+    The PDF is surfaced only after the admin publishes it."""
     snap = dict(card.data_snapshot or {})
     snap["id"] = card.id
+    snap["pdfUrl"] = card.pdf_url if card.pdf_published_at else None
     return snap
 
 
