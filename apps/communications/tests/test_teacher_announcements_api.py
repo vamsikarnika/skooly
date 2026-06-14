@@ -62,6 +62,29 @@ def test_list_returns_school_class_and_section_scoped(client: Client, world_a) -
 
 
 @pytest.mark.django_db
+def test_parent_only_announcement_hidden_from_teachers(client: Client, world_a) -> None:
+    from apps.communications.models import AnnouncementRecipient
+
+    _teacher(world_a)  # assigned to section_a
+    school = world_a["school"]
+    Announcement.objects.create(
+        school=school, title="parents-only", body="", date=today_local(),
+        category=AnnouncementCategory.SCHOOL,
+        recipient_type=AnnouncementRecipient.PARENTS,
+    )
+    Announcement.objects.create(
+        school=school, title="staff-notice", body="", date=today_local(),
+        category=AnnouncementCategory.SCHOOL,
+        recipient_type=AnnouncementRecipient.TEACHERS,
+    )
+    res = client.get("/api/v1/teacher/announcements", **_auth(world_a["teacher_user"]))
+    assert res.status_code == 200, res.content
+    titles = {a["title"] for a in res.json()}
+    assert "parents-only" not in titles
+    assert "staff-notice" in titles
+
+
+@pytest.mark.django_db
 def test_list_is_read_reflects_per_teacher_state(client: Client, world_a) -> None:
     teacher = _teacher(world_a)
     a = _ann(world_a["school"], title="hi")

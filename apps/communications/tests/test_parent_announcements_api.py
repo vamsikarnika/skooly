@@ -76,6 +76,28 @@ def test_mark_read(client: Client, world_a) -> None:
 
 
 @pytest.mark.django_db
+def test_teacher_only_announcement_hidden_from_parents(client: Client, world_a) -> None:
+    from apps.communications.models import AnnouncementRecipient
+
+    user, student = _parent_with_child(world_a)
+    school = world_a["school"]
+    Announcement.objects.create(
+        school=school, title="staff-only", body="", date=date(2026, 5, 20),
+        category=AnnouncementCategory.SCHOOL,
+        recipient_type=AnnouncementRecipient.TEACHERS,
+    )
+    Announcement.objects.create(
+        school=school, title="for-parents", body="", date=date(2026, 5, 20),
+        category=AnnouncementCategory.SCHOOL,
+        recipient_type=AnnouncementRecipient.PARENTS,
+    )
+    res = client.get(f"/api/v1/parent/children/{student.id}/announcements", **_auth(user))
+    titles = {a["title"] for a in res.json()}
+    assert "staff-only" not in titles
+    assert "for-parents" in titles
+
+
+@pytest.mark.django_db
 def test_mark_read_cross_tenant_404(client: Client, world_a, world_b) -> None:
     user_a, _ = _parent_with_child(world_a, phone="+919876512345")
     _parent_with_child(world_b, phone="+919876599999")

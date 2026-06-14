@@ -29,6 +29,16 @@ class AnnouncementCategory(models.TextChoices):
     FEE = "fee", "Fee"
 
 
+class AnnouncementRecipient(models.TextChoices):
+    """Who an announcement is intended for. The class/section targeting still
+    scopes *which* parents/teachers; this decides which audience sees it at
+    all. EVERYONE preserves the original broadcast-to-all behaviour."""
+
+    PARENTS = "parents", "Parents"
+    TEACHERS = "teachers", "Teachers"
+    EVERYONE = "everyone", "Everyone"
+
+
 class Announcement(TenantScopedModel):
     """A broadcast notice. Targeting: school-wide (no target_class/section),
     class-wide (target_class set), or section-wide (target_section set).
@@ -42,6 +52,11 @@ class Announcement(TenantScopedModel):
     body = models.TextField(blank=True)
     date = models.DateField()
     category = models.CharField(max_length=16, choices=AnnouncementCategory.choices)
+    recipient_type = models.CharField(
+        max_length=16,
+        choices=AnnouncementRecipient.choices,
+        default=AnnouncementRecipient.EVERYONE,
+    )
     target_class = models.ForeignKey(
         "academics.Class",
         on_delete=models.CASCADE,

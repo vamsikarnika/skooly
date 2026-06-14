@@ -16,13 +16,16 @@ from ninja import Router
 
 from apps.accounts.parent_auth import get_parent, get_parent_child, parent_jwt_auth
 from apps.accounts.parent_schemas import SuccessResponse
-from apps.communications.models import Announcement, Notification
+from apps.communications.models import Announcement, AnnouncementRecipient, Notification
 from apps.core.exceptions import NotFound
 from apps.core.schemas import CamelSchema
 
 router = Router(tags=["parent-notifications"], auth=parent_jwt_auth, by_alias=True)
 
 _IST = ZoneInfo(getattr(settings, "DISPLAY_TIME_ZONE", "Asia/Kolkata"))
+
+# Announcements a parent is allowed to see, by intended audience.
+PARENT_RECIPIENTS = (AnnouncementRecipient.PARENTS, AnnouncementRecipient.EVERYONE)
 
 
 class NotificationOut(CamelSchema):
@@ -126,7 +129,9 @@ def announcement_queryset_for(student):
     school_wide = Q(target_class__isnull=True, target_section__isnull=True)
     class_match = Q(target_class_id=class_id) if class_id is not None else Q(pk__in=[])
     section_match = Q(target_section_id=section_id) if section_id is not None else Q(pk__in=[])
-    return Announcement.objects.filter(school_wide | class_match | section_match)
+    return Announcement.objects.filter(school_wide | class_match | section_match).filter(
+        recipient_type__in=PARENT_RECIPIENTS
+    )
 
 
 @router.get("/children/{child_id}/announcements", response=list[AnnouncementOut])
@@ -166,7 +171,12 @@ def mark_announcement_read(request: HttpRequest, announcement_id: int) -> dict:
         | Q(target_class_id__in=parent_class_ids)
         | Q(target_section_id__in=parent_section_ids)
     )
-    announcement = Announcement.objects.filter(id=announcement_id).filter(visible).first()
+    announcement = (
+        Announcement.objects.filter(id=announcement_id)
+        .filter(visible)
+        .filter(recipient_type__in=PARENT_RECIPIENTS)
+        .first()
+    )
     if announcement is None:
         raise NotFound("No such announcement.")
     if not announcement.is_read:
