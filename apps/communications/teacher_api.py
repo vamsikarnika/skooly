@@ -17,7 +17,11 @@ from ninja import Query, Router
 
 from apps.academics.models import TeacherAssignment
 from apps.accounts.teacher_auth import get_teacher, teacher_jwt_auth
-from apps.communications.models import Announcement, AnnouncementTeacherRead
+from apps.communications.models import (
+    Announcement,
+    AnnouncementRecipient,
+    AnnouncementTeacherRead,
+)
 from apps.core.exceptions import NotFound
 from apps.core.helpers import today_local
 from apps.core.schemas import ActionResponse, CamelSchema
@@ -27,6 +31,9 @@ router = Router(tags=["teacher-announcements"], auth=teacher_jwt_auth, by_alias=
 # Allowed look-back windows in months. Anything else falls back to 1; capped
 # at 12 so the list never grows unbounded.
 ALLOWED_MONTHS = (1, 3, 6, 12)
+
+# Announcements a teacher is allowed to see, by intended audience.
+TEACHER_RECIPIENTS = (AnnouncementRecipient.TEACHERS, AnnouncementRecipient.EVERYONE)
 
 
 class AnnouncementOut(CamelSchema):
@@ -71,9 +78,11 @@ def list_announcements(request: HttpRequest, months: int = Query(1)) -> list[dic
     cutoff = today_local() - relativedelta(months=months)
     class_ids, section_ids = _teacher_scope(teacher, _academic_year_id(request))
     rows = list(
-        Announcement.objects.filter(_visible_q(class_ids, section_ids), date__gte=cutoff).order_by(
-            "-date", "-id"
-        )[:50]
+        Announcement.objects.filter(
+            _visible_q(class_ids, section_ids),
+            date__gte=cutoff,
+            recipient_type__in=TEACHER_RECIPIENTS,
+        ).order_by("-date", "-id")[:50]
     )
     read_ids = set(
         AnnouncementTeacherRead.objects.filter(
@@ -100,6 +109,7 @@ def mark_announcement_read(request: HttpRequest, announcement_id: int) -> dict:
     announcement = (
         Announcement.objects.filter(id=announcement_id)
         .filter(_visible_q(class_ids, section_ids))
+        .filter(recipient_type__in=TEACHER_RECIPIENTS)
         .first()
     )
     if announcement is None:
