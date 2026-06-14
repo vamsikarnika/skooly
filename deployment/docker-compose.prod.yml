@@ -1,0 +1,42 @@
+# Production stack for the Skooly backend on a single VM.
+#
+# The frontend runs separately on Cloudflare Workers (see skooly-stride), and
+# the database is managed Neon Postgres — so this box only runs two containers:
+#   • api         — Django via gunicorn (migrate + collectstatic on start)
+#   • cloudflared — Cloudflare Tunnel; routes api.smartskool.in -> api:8000
+#
+# Nothing is published to the host: cloudflared makes an OUTBOUND connection to
+# Cloudflare, so the origin has no open inbound ports. Lock the VM firewall to
+# SSH only.
+#
+# Run from this directory via deploy.sh (it sources .env.prod first so the
+# ${CLOUDFLARE_TUNNEL_TOKEN} interpolation below resolves).
+name: smartskool
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: smartskool-api:latest
+    restart: unless-stopped
+    command: ["gunicorn"]
+    env_file:
+      - .env.prod
+    expose:
+      - "8000" # internal to the compose network only — not published
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; urllib.request.urlopen('http://localhost:8000/api/v1/docs'); \" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - api

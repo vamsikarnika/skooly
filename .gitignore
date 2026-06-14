@@ -51,3 +51,6 @@ docs/openapi.json
 
 # Local agent config
 .claude/
+
+# Production secrets — never commit
+deployment/.env.prod
