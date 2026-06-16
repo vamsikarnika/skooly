@@ -26,7 +26,10 @@ services:
     expose:
       - "8000" # internal to the compose network only — not published
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; urllib.request.urlopen('http://localhost:8000/api/v1/docs'); \" || exit 1"]
+      # Probe over the compose network. X-Forwarded-Proto: https tells Django
+      # (SECURE_PROXY_SSL_HEADER) the request is already TLS, so it returns 200
+      # instead of a 301 to https. localhost must be in ALLOWED_HOSTS.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen(urllib.request.Request('http://localhost:8000/api/v1/docs', headers={'X-Forwarded-Proto': 'https'}))\" || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
