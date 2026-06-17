@@ -63,6 +63,28 @@ def test_signup_validates_required_fields(client: Client) -> None:
 
 
 @pytest.mark.django_db
+def test_signup_blocked_without_token_when_secret_set(client: Client, settings) -> None:
+    settings.SIGNUP_SECRET = "topsecret"
+    res = client.post("/api/v1/auth/signup", data=SIGNUP_PAYLOAD, content_type="application/json")
+    assert res.status_code == 403, res.content
+    assert res.json()["error"]["code"] == "FORBIDDEN"
+    assert School.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_signup_allowed_with_correct_token(client: Client, settings) -> None:
+    settings.SIGNUP_SECRET = "topsecret"
+    res = client.post(
+        "/api/v1/auth/signup",
+        data=SIGNUP_PAYLOAD,
+        content_type="application/json",
+        headers={"X-Signup-Token": "topsecret"},
+    )
+    assert res.status_code == 200, res.content
+    assert School.objects.count() == 1
+
+
+@pytest.mark.django_db
 def test_login_success(client: Client, admin_user: User) -> None:
     res = client.post(
         "/api/v1/auth/login",
