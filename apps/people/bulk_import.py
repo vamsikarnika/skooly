@@ -102,13 +102,18 @@ def _string(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
+def _select_sheet(wb, name):  # type: ignore[no-untyped-def]
+    """Pick the named sheet from a multi-tab workbook, else the active sheet."""
+    return wb[name] if name in wb.sheetnames else wb.active
+
+
 def parse_workbook(*, file_bytes: bytes, school: School) -> ParseResult:
     try:
         wb = load_workbook(BytesIO(file_bytes), data_only=True, read_only=True)
     except Exception as exc:
         raise ValidationFailed("Could not parse Excel file.", {"file": [str(exc)]}) from exc
 
-    ws = wb.active
+    ws = _select_sheet(wb, "Students")
     if ws is None:
         raise ValidationFailed("Workbook has no sheets.", {"file": ["empty"]})
 

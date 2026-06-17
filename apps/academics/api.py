@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from django.db.models import Count, Q
 from django.http import HttpRequest
-from ninja import Query, Router
+from ninja import File, Form, Query, Router
+from ninja.files import UploadedFile
 
+from apps.academics import bulk_import as bulk
 from apps.academics import services_write
 from apps.academics.models import Class, Section, Subject, TeacherAssignment
 from apps.academics.schemas import (
@@ -28,6 +30,7 @@ from apps.accounts.models import Role
 from apps.core.exceptions import Forbidden, NotFound
 from apps.core.helpers import get_in_tenant
 from apps.core.schemas import ActionResponse
+from apps.people.schemas import BulkImportResponse
 
 router = Router(tags=["academics"], auth=jwt_auth, by_alias=True)
 
@@ -112,6 +115,36 @@ def create_class(request: HttpRequest, payload: ClassCreateRequest) -> dict:
         "id": cls.id, "name": cls.name, "academic_year_id": cls.academic_year_id,
         "display_order": cls.display_order, "sections": [], "student_count": 0,
     }
+
+
+@router.post("/classes/bulk-import", response=BulkImportResponse)
+def bulk_import_classes(
+    request: HttpRequest,
+    file: UploadedFile = File(...),
+    dry_run: bool = Form(default=True, alias="dryRun"),
+) -> dict:
+    _require_admin(request)
+    school = _school(request)
+    file_bytes = file.read()
+    parsed = bulk.parse_workbook(file_bytes=file_bytes, school=school)
+
+    response = {
+        "ok": parsed.ok,
+        "dry_run": dry_run,
+        "row_count": len(parsed.rows) + len(parsed.errors),
+        "valid_rows": len(parsed.rows),
+        "error_count": len(parsed.errors),
+        "errors": [
+            {"row": e.row, "field": e.field, "message": e.message} for e in parsed.errors
+        ],
+        "imported": 0,
+    }
+
+    if dry_run or not parsed.ok:
+        return response
+
+    response["imported"] = bulk.import_rows(school=school, rows=parsed.rows)
+    return response
 
 
 @router.patch("/classes/{class_id}", response=ClassOut)
