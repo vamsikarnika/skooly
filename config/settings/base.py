@@ -133,6 +133,11 @@ NINJA_JWT = {
     "TOKEN_TYPE_CLAIM": "token_type",
 }
 
+# Public-signup gate. When set (prod), POST /auth/signup requires a matching
+# X-Signup-Token header — so only the operator can onboard new schools. When
+# empty (dev/test/local), signup is open. See apps/accounts/api.py.
+SIGNUP_SECRET = config("SIGNUP_SECRET", default="")
+
 # CORS
 CORS_ALLOWED_ORIGINS = config(
     "CORS_ALLOWED_ORIGINS",

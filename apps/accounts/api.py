@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hmac
 from typing import Any
 
+from django.conf import settings
 from django.http import HttpRequest
 from ninja import Router
 
@@ -24,6 +26,7 @@ from apps.accounts.schemas import (
     VerifyOtpRequest,
     VerifyOtpResponse,
 )
+from apps.core.exceptions import Forbidden
 
 router = Router(tags=["auth"], by_alias=True)
 
@@ -37,8 +40,22 @@ def _build_auth_response(user: Any, school: Any, tokens: dict[str, str]) -> Auth
     )
 
 
+def _require_signup_allowed(request: HttpRequest) -> None:
+    """Gate public signup behind SIGNUP_SECRET. When the secret is set (prod),
+    only requests carrying a matching X-Signup-Token header may create a school;
+    when unset (dev/test/local), signup is open. Constant-time compare avoids
+    leaking the secret via timing."""
+    secret = settings.SIGNUP_SECRET
+    if not secret:
+        return
+    provided = request.headers.get("X-Signup-Token", "")
+    if not hmac.compare_digest(provided, secret):
+        raise Forbidden("Public signup is disabled.")
+
+
 @router.post("/signup", response=AuthResponse)
 def signup(request: HttpRequest, payload: SignupRequest) -> AuthResponse:
+    _require_signup_allowed(request)
     user, school, tokens = services.signup_school(
         school_name=payload.school_name,
         board=payload.board,
