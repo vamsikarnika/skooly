@@ -29,9 +29,9 @@ from apps.people.teacher_api import router as teacher_students_router
 from apps.schools.api import router as schools_router
 
 api = NinjaAPI(
-    title="Skooly API",
+    title="SmartSkool API",
     version="1.0.0",
-    description="Skooly — school management platform API (admin / skooly-stride).",
+    description="SmartSkool — school management platform API (admin / skooly-stride).",
     docs_url="/docs",
     openapi_url="/openapi.json",
 )
@@ -58,9 +58,9 @@ register_exception_handlers(api)
 # here as each teacher sub-phase lands.
 # ---------------------------------------------------------------------------
 teacher_api = NinjaAPI(
-    title="Skooly Teacher API",
+    title="SmartSkool Teacher API",
     version="teacher-1.0.0",
-    description="Skooly — teacher mobile app (skooly-guru) API.",
+    description="SmartSkool — teacher mobile app (skooly-guru) API.",
     urls_namespace="teacher",
     docs_url="/docs",
     openapi_url="/openapi.json",
@@ -85,9 +85,9 @@ register_exception_handlers(teacher_api)
 # endpoints resolve the Student through the authenticated parent's links.
 # ---------------------------------------------------------------------------
 parent_api = NinjaAPI(
-    title="Skooly Parent API",
+    title="SmartSkool Parent API",
     version="parent-1.0.0",
-    description="Skooly — parent mobile app (skooly-parent) API.",
+    description="SmartSkool — parent mobile app (skooly-parent) API.",
     urls_namespace="parent",
     docs_url="/docs",
     openapi_url="/openapi.json",

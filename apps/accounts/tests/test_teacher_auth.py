@@ -26,13 +26,13 @@ def test_teacher_api_mounted_and_admin_not_shadowed() -> None:
 
     teacher_doc = client.get("/api/v1/teacher/openapi.json")
     assert teacher_doc.status_code == 200, teacher_doc.content
-    assert teacher_doc.json()["info"]["title"] == "Skooly Teacher API"
+    assert teacher_doc.json()["info"]["title"] == "SmartSkool Teacher API"
 
     # The broader /api/v1/ prefix still resolves to the admin API and was not
     # swallowed by the teacher mount (and vice versa).
     admin_doc = client.get("/api/v1/openapi.json")
     assert admin_doc.status_code == 200, admin_doc.content
-    assert admin_doc.json()["info"]["title"] == "Skooly API"
+    assert admin_doc.json()["info"]["title"] == "SmartSkool API"
 
 
 @pytest.mark.django_db
