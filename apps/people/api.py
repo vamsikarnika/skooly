@@ -15,6 +15,7 @@ from apps.core.schemas import ActionResponse
 from apps.core.storage import save_uploaded_image
 from apps.people import bulk_import as bulk
 from apps.people import export, services, services_write
+from apps.people import teacher_bulk_import as teacher_bulk
 from apps.people.models import Student, Teacher
 from apps.people.schemas import (
     BulkImportResponse,
@@ -208,6 +209,36 @@ def upload_student_photo(
 
 
 # ----- Teachers --------------------------------------------------------------
+
+@router.post("/teachers/bulk-import", response=BulkImportResponse)
+def bulk_import_teachers(
+    request: HttpRequest,
+    file: UploadedFile = File(...),
+    dry_run: bool = Form(default=True, alias="dryRun"),
+) -> dict:
+    _require_admin(request)
+    school = _school(request)
+    file_bytes = file.read()
+    parsed = teacher_bulk.parse_workbook(file_bytes=file_bytes, school=school)
+
+    response = {
+        "ok": parsed.ok,
+        "dry_run": dry_run,
+        "row_count": len(parsed.rows) + len(parsed.errors),
+        "valid_rows": len(parsed.rows),
+        "error_count": len(parsed.errors),
+        "errors": [
+            {"row": e.row, "field": e.field, "message": e.message} for e in parsed.errors
+        ],
+        "imported": 0,
+    }
+
+    if dry_run or not parsed.ok:
+        return response
+
+    response["imported"] = teacher_bulk.import_rows(school=school, rows=parsed.rows)
+    return response
+
 
 @router.get("/teachers", response=TeacherListOut)
 def list_teachers(
