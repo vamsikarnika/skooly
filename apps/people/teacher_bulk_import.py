@@ -50,7 +50,11 @@ class ParseResult:
 
 
 def _string(value: Any) -> str:
-    return "" if value is None else str(value).strip()
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
 
 
 def _coerce_date(value: Any) -> date | None:
