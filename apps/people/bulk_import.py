@@ -173,7 +173,7 @@ def parse_workbook(*, file_bytes: bytes, school: School) -> ParseResult:
         if not first_name:
             errs.append(RowError(row_num, "first_name", "required"))
         if gender not in Gender.values:
-            errs.append(RowError(row_num, "gender", f"must be one of {Gender.values}"))
+            errs.append(RowError(row_num, "gender", "must be Male or Female"))
 
         try:
             admission_date = _coerce_date(cell("admission_date"))
