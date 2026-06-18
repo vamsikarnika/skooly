@@ -18,6 +18,7 @@ from apps.academics.schemas import (
 )
 from apps.academics.schemas_in import (
     ClassCreateRequest,
+    ClassSubjectRequest,
     ClassUpdateRequest,
     SectionCreateRequest,
     SectionUpdateRequest,
@@ -260,6 +261,52 @@ def delete_subject(request: HttpRequest, subject_id: int) -> ActionResponse:
         school=_school(request), actor_id=_user(request).id, subject_id=subject_id
     )
     return ActionResponse(success=True, message="Subject deleted.")
+
+
+# ----- Class subjects (which subjects a class teaches) -----------------------
+
+@router.get("/classes/{class_id}/subjects", response=list[SubjectOut])
+def list_class_subjects(request: HttpRequest, class_id: int) -> list[SubjectOut]:
+    """Subjects mapped to this class. These are the rows the section page's
+    'Subject teachers' picker assigns teachers to."""
+    school = _school(request)
+    cls = get_in_tenant(Class, school, pk=class_id)
+    subjects = (
+        Subject.objects.filter(school=school, class_mappings__class_obj=cls.id)
+        .order_by("name")
+        .distinct()
+    )
+    return [SubjectOut.from_orm(s) for s in subjects]
+
+
+@router.post("/classes/{class_id}/subjects", response=ActionResponse)
+def attach_class_subject(
+    request: HttpRequest, class_id: int, payload: ClassSubjectRequest
+) -> ActionResponse:
+    _require_admin(request)
+    mapping = services_write.attach_subject_to_class(
+        school=_school(request),
+        actor_id=_user(request).id,
+        class_id=class_id,
+        subject_id=payload.subject_id,
+    )
+    return ActionResponse(
+        success=True, message="Subject added to class.", data={"id": mapping.id}
+    )
+
+
+@router.delete("/classes/{class_id}/subjects/{subject_id}", response=ActionResponse)
+def detach_class_subject(
+    request: HttpRequest, class_id: int, subject_id: int
+) -> ActionResponse:
+    _require_admin(request)
+    services_write.detach_subject_from_class(
+        school=_school(request),
+        actor_id=_user(request).id,
+        class_id=class_id,
+        subject_id=subject_id,
+    )
+    return ActionResponse(success=True, message="Subject removed from class.")
 
 
 # ----- Teacher assignments ---------------------------------------------------

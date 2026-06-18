@@ -218,6 +218,88 @@ def test_teacher_assignment_cross_tenant_404(
 
 
 @pytest.mark.django_db
+def test_class_subject_attach_list_detach(client, admin_token_a, world_a):
+    """Attach a subject to a class, see it in the class-subjects list, detach it."""
+    school = world_a["school"]
+    cls = world_a["class"]
+    subject = SubjectFactory(school=school, name="Geography")
+
+    # Initially the class has no subjects.
+    res = client.get(
+        f"/api/v1/classes/{cls.id}/subjects",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 200
+    assert res.json() == []
+
+    # Attach.
+    res = client.post(
+        f"/api/v1/classes/{cls.id}/subjects",
+        data={"subjectId": subject.id},
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 200, res.content
+
+    # Now listed.
+    res = client.get(
+        f"/api/v1/classes/{cls.id}/subjects",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert [s["name"] for s in res.json()] == ["Geography"]
+
+    # Duplicate attach → 409.
+    res = client.post(
+        f"/api/v1/classes/{cls.id}/subjects",
+        data={"subjectId": subject.id},
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 409
+
+    # Detach.
+    res = client.delete(
+        f"/api/v1/classes/{cls.id}/subjects/{subject.id}",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 200
+
+    # Re-attach works (proves we didn't leave a soft-deleted row blocking it).
+    res = client.post(
+        f"/api/v1/classes/{cls.id}/subjects",
+        data={"subjectId": subject.id},
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 200, res.content
+
+
+@pytest.mark.django_db
+def test_class_subject_cross_tenant_404(client, admin_token_a, world_a, world_b):
+    """Admin A cannot attach a subject to B's class."""
+    subject = SubjectFactory(school=world_a["school"], name="Civics")
+    res = client.post(
+        f"/api/v1/classes/{world_b['class'].id}/subjects",
+        data={"subjectId": subject.id},
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 404
+
+
+@pytest.mark.django_db
+def test_teacher_cannot_attach_class_subject(client, teacher_token_a, world_a):
+    subject = SubjectFactory(school=world_a["school"], name="Art")
+    res = client.post(
+        f"/api/v1/classes/{world_a['class'].id}/subjects",
+        data={"subjectId": subject.id},
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {teacher_token_a}",
+    )
+    assert res.status_code == 403
+
+
+@pytest.mark.django_db
 def test_teacher_cannot_create_class(client, teacher_token_a, world_a):
     res = client.post(
         "/api/v1/classes",
