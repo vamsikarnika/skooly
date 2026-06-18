@@ -61,17 +61,25 @@ def _coerce_date(value: Any) -> date | None:
     if value is None or value == "":
         return None
     if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if isinstance(value, str):
+        d = value.date()
+    elif isinstance(value, date):
+        d = value
+    elif isinstance(value, str):
+        d = None
         for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
             try:
-                return datetime.strptime(value, fmt).date()
+                d = datetime.strptime(value, fmt).date()
+                break
             except ValueError:
                 continue
-        raise ValueError(f"unparseable date '{value}'")
-    raise ValueError(f"unsupported date type {type(value).__name__}")
+        if d is None:
+            raise ValueError(f"unparseable date '{value}' (use YYYY-MM-DD or DD/MM/YYYY)")
+    else:
+        raise ValueError(f"unsupported date type {type(value).__name__}")
+    today = date.today()
+    if not (date(1950, 1, 1) <= d <= date(today.year + 1, 12, 31)):
+        raise ValueError(f"date '{d.isoformat()}' is out of range (1950 to next year)")
+    return d
 
 
 def _select_sheet(wb, name):  # type: ignore[no-untyped-def]
