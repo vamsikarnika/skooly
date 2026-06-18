@@ -43,6 +43,10 @@ class SubjectUpdateRequest(CamelSchema):
     code: str | None = None
 
 
+class ClassSubjectRequest(CamelSchema):
+    subject_id: int
+
+
 class TeacherAssignmentRequest(CamelSchema):
     teacher_id: int
     subject_id: int

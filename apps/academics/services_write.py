@@ -11,10 +11,11 @@ from apps.academics.models import (
     Section,
     StudentEnrollment,
     Subject,
+    SubjectClassMapping,
     TeacherAssignment,
 )
 from apps.core.audit import log_action
-from apps.core.exceptions import Conflict, ValidationFailed
+from apps.core.exceptions import Conflict, NotFound, ValidationFailed
 from apps.core.helpers import get_in_tenant
 from apps.people.models import Teacher
 from apps.schools.models import AcademicYear, School
@@ -153,6 +154,43 @@ def delete_subject(*, school: School, actor_id: int, subject_id: int) -> None:
     subject.soft_delete()
     log_action(school_id=school.id, user_id=actor_id, action="subject.delete",
                model_name="Subject", object_id=subject.id)
+
+
+# ----- Class subjects (subject <-> class mappings) ---------------------------
+
+@transaction.atomic
+def attach_subject_to_class(
+    *, school: School, actor_id: int, class_id: int, subject_id: int
+) -> SubjectClassMapping:
+    cls = get_in_tenant(Class, school, pk=class_id)
+    subject = get_in_tenant(Subject, school, pk=subject_id)
+    mapping, created = SubjectClassMapping.objects.get_or_create(
+        school=school, class_obj=cls, subject=subject
+    )
+    if not created:
+        raise Conflict("That subject is already assigned to this class.")
+    log_action(school_id=school.id, user_id=actor_id, action="subject_class_mapping.create",
+               model_name="SubjectClassMapping", object_id=mapping.id)
+    return mapping
+
+
+@transaction.atomic
+def detach_subject_from_class(
+    *, school: School, actor_id: int, class_id: int, subject_id: int
+) -> None:
+    cls = get_in_tenant(Class, school, pk=class_id)
+    mapping = SubjectClassMapping.objects.filter(
+        school=school, class_obj=cls, subject_id=subject_id
+    ).first()
+    if mapping is None:
+        raise NotFound("That subject is not assigned to this class.")
+    mapping_id = mapping.id
+    # Hard delete: the mapping is a pure join row with no history worth keeping,
+    # and a soft-deleted row would block re-attaching via the (subject, class)
+    # unique constraint.
+    mapping.delete()
+    log_action(school_id=school.id, user_id=actor_id, action="subject_class_mapping.delete",
+               model_name="SubjectClassMapping", object_id=mapping_id)
 
 
 # ----- Teacher assignments ---------------------------------------------------
