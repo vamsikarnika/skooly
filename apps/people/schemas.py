@@ -58,6 +58,12 @@ class TeacherListOut(Paginated[TeacherOut]):
     pass
 
 
+class TempPasswordOut(CamelSchema):
+    """A freshly generated login password, returned once for the admin to share."""
+
+    password: str
+
+
 class BulkImportRowError(CamelSchema):
     row: int
     field: str

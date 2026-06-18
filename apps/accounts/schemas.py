@@ -49,6 +49,9 @@ class MeResponse(CamelSchema):
     user: UserOut
     school: SchoolOut | None
     permissions: list[str] = Field(default_factory=list)
+    # Temporary flag — drives the admin "set teacher password" action. Goes away
+    # with OTP-based teacher onboarding.
+    teacher_password_provisioning: bool = False
 
 
 # ---------- Inputs ----------

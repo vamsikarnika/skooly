@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from django.conf import settings
 from django.http import HttpRequest, HttpResponse
 from ninja import File, Form, Query, Router
 from ninja.files import UploadedFile
@@ -23,6 +24,7 @@ from apps.people.schemas import (
     StudentOut,
     TeacherListOut,
     TeacherOut,
+    TempPasswordOut,
 )
 from apps.people.schemas_in import (
     StudentCreateRequest,
@@ -294,6 +296,24 @@ def delete_teacher(request: HttpRequest, teacher_id: int) -> ActionResponse:
         teacher_id=teacher_id,
     )
     return ActionResponse(success=True, message="Teacher marked inactive.")
+
+
+@router.post("/teachers/{teacher_id}/reset-password", response=TempPasswordOut)
+def reset_teacher_password(request: HttpRequest, teacher_id: int) -> TempPasswordOut:
+    """Generate a first-login password for the teacher. Admin-only; the
+    plaintext is returned once for the admin to hand over and is never stored.
+
+    Temporary feature — disabled (404) when TEACHER_PASSWORD_PROVISIONING is off,
+    which is how we retire it once OTP-based onboarding ships."""
+    if not settings.TEACHER_PASSWORD_PROVISIONING:
+        raise NotFound("Teacher password provisioning is disabled.")
+    _require_admin(request)
+    password = services_write.reset_teacher_login_password(
+        school=_school(request),
+        actor_id=_user(request).id,
+        teacher_id=teacher_id,
+    )
+    return TempPasswordOut(password=password)
 
 
 @router.post("/teachers/{teacher_id}/photo", response=TeacherOut)

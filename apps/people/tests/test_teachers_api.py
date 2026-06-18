@@ -110,3 +110,84 @@ def test_teacher_cannot_create_teacher(client, teacher_token_a):
         HTTP_AUTHORIZATION=f"Bearer {teacher_token_a}",
     )
     assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_reset_teacher_password_creates_login(client, admin_token_a, world_a):
+    """Admin generates a first-login password; the teacher (who had no User
+    yet) can then sign in with it."""
+    teacher = TeacherFactory(school=world_a["school"], phone="+919999000050")
+    assert teacher.user is None
+
+    res = client.post(
+        f"/api/v1/teachers/{teacher.id}/reset-password",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 200, res.content
+    password = res.json()["password"]
+    assert len(password) >= 8
+
+    teacher.refresh_from_db()
+    assert teacher.user is not None  # login account created on demand
+
+    # The generated password actually works at the teacher login.
+    login = client.post(
+        "/api/v1/teacher/auth/login",
+        data={"phone": "+919999000050", "password": password},
+        content_type="application/json",
+    )
+    assert login.status_code == 200, login.content
+
+
+@pytest.mark.django_db
+def test_reset_teacher_password_regenerates(client, admin_token_a, world_a):
+    """Calling twice yields a different password and the old one stops working."""
+    teacher = TeacherFactory(school=world_a["school"], phone="+919999000051")
+    first = client.post(
+        f"/api/v1/teachers/{teacher.id}/reset-password",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    ).json()["password"]
+    second = client.post(
+        f"/api/v1/teachers/{teacher.id}/reset-password",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    ).json()["password"]
+    assert first != second
+
+    stale = client.post(
+        "/api/v1/teacher/auth/login",
+        data={"phone": "+919999000051", "password": first},
+        content_type="application/json",
+    )
+    assert stale.status_code != 200
+
+
+@pytest.mark.django_db
+def test_reset_teacher_password_cross_tenant_404(client, admin_token_a, world_b):
+    teacher = TeacherFactory(school=world_b["school"], phone="+919999000052")
+    res = client.post(
+        f"/api/v1/teachers/{teacher.id}/reset-password",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 404
+
+
+@pytest.mark.django_db
+def test_teacher_cannot_reset_password(client, teacher_token_a, world_a):
+    teacher = TeacherFactory(school=world_a["school"], phone="+919999000053")
+    res = client.post(
+        f"/api/v1/teachers/{teacher.id}/reset-password",
+        HTTP_AUTHORIZATION=f"Bearer {teacher_token_a}",
+    )
+    assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_reset_teacher_password_disabled_by_flag(client, admin_token_a, world_a, settings):
+    """The temporary feature can be switched off via TEACHER_PASSWORD_PROVISIONING."""
+    settings.TEACHER_PASSWORD_PROVISIONING = False
+    teacher = TeacherFactory(school=world_a["school"], phone="+919999000054")
+    res = client.post(
+        f"/api/v1/teachers/{teacher.id}/reset-password",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 404

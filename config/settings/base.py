@@ -138,6 +138,14 @@ NINJA_JWT = {
 # empty (dev/test/local), signup is open. See apps/accounts/api.py.
 SIGNUP_SECRET = config("SIGNUP_SECRET", default="")
 
+# TEMPORARY: lets a school admin generate first-login passwords for teachers,
+# until OTP-based teacher onboarding ships. Flip to False (env) to disable the
+# API endpoint and hide the admin-UI action in one move. Remove this flag and
+# the reset-password endpoint once OTP onboarding is live.
+TEACHER_PASSWORD_PROVISIONING = config(
+    "TEACHER_PASSWORD_PROVISIONING", default=True, cast=bool
+)
+
 # CORS
 CORS_ALLOWED_ORIGINS = config(
     "CORS_ALLOWED_ORIGINS",
