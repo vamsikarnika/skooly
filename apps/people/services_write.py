@@ -5,6 +5,7 @@ to ``Student``, not to a section.
 
 from __future__ import annotations
 
+import secrets
 from datetime import date
 from typing import Any
 
@@ -12,11 +13,21 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.academics.models import Section, StudentEnrollment
+from apps.accounts.models import Role, User
+from apps.accounts.services import normalize_in_phone
 from apps.core.audit import log_action
 from apps.core.exceptions import Conflict, ValidationFailed
 from apps.core.helpers import get_in_tenant
 from apps.people.models import Gender, Student, StudentStatus, Teacher, TeacherStatus
 from apps.schools.models import School
+
+# Ambiguous characters (0/O, 1/l/I) are left out so a handed-out password is
+# easy to read off a screen and type on a phone.
+_TEMP_PW_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+
+
+def _generate_temp_password(length: int = 10) -> str:
+    return "".join(secrets.choice(_TEMP_PW_ALPHABET) for _ in range(length))
 
 # ----- Students --------------------------------------------------------------
 
@@ -286,3 +297,42 @@ def soft_delete_teacher(*, school: School, actor_id: int, teacher_id: int) -> No
         school_id=school.id, user_id=actor_id,
         action="teacher.delete", model_name="Teacher", object_id=teacher.id,
     )
+
+
+@transaction.atomic
+def reset_teacher_login_password(*, school: School, actor_id: int, teacher_id: int) -> str:
+    """Generate a fresh login password for a teacher and return it once.
+
+    Admins hand this to the teacher for their first sign-in. The login ``User``
+    is created on demand (teachers otherwise self-activate via OTP). Only the
+    hash is stored — the plaintext is returned to the caller and never persisted.
+    """
+    teacher = get_in_tenant(Teacher, school, pk=teacher_id)
+    normalized = normalize_in_phone(teacher.phone)
+    password = _generate_temp_password()
+
+    user = teacher.user
+    if user is None:
+        existing = User.objects.filter(phone=normalized).first()
+        if existing is not None and existing.role != Role.TEACHER:
+            raise Conflict("That phone is already in use by another account.")
+        user = existing or User(
+            phone=normalized,
+            role=Role.TEACHER,
+            school=school,
+            first_name=teacher.first_name,
+            last_name=teacher.last_name,
+            email=teacher.email,
+            is_active=True,
+        )
+    user.set_password(password)
+    user.save()
+    if teacher.user_id != user.id:
+        teacher.user = user
+        teacher.save(update_fields=["user"])
+
+    log_action(
+        school_id=school.id, user_id=actor_id,
+        action="teacher.reset_password", model_name="Teacher", object_id=teacher.id,
+    )
+    return password

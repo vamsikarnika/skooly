@@ -110,4 +110,5 @@ def me(request: HttpRequest) -> MeResponse:
         user=UserOut.from_orm(user),
         school=SchoolOut.from_orm(school) if school else None,
         permissions=services.get_permissions(user),
+        teacher_password_provisioning=settings.TEACHER_PASSWORD_PROVISIONING,
     )
