@@ -171,3 +171,21 @@ def test_blank_rows_skipped(client, admin_token_a, world_a):
     body = res.json()
     assert body["validRows"] == 1
     assert body["errorCount"] == 0
+
+
+@pytest.mark.django_db
+def test_rejects_out_of_range_admission_date(client, admin_token_a, world_a):
+    """A typo'd year like 1016 must be caught, not imported."""
+    rows = [
+        HEADERS,
+        ["VB777", "Old", "Date", "Male", date(2014, 5, 1), "26/06/1016",
+         "Class 6", "A", "07", "Parent", "+919800000077", "Father", "yes"],
+    ]
+    res = _post(client, admin_token_a, _make_xlsx(rows), dry_run=True)
+    assert res.status_code == 200, res.content
+    body = res.json()
+    assert body["ok"] is False
+    assert any(
+        e["field"] == "admission_date" and "out of range" in e["message"]
+        for e in body["errors"]
+    ), body["errors"]

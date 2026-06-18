@@ -76,18 +76,25 @@ def _coerce_date(value: Any) -> date | None:
     if value is None or value == "":
         return None
     if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if isinstance(value, str):
-        try:
-            return datetime.strptime(value, "%Y-%m-%d").date()
-        except ValueError:
+        d = value.date()
+    elif isinstance(value, date):
+        d = value
+    elif isinstance(value, str):
+        d = None
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
             try:
-                return datetime.strptime(value, "%d/%m/%Y").date()
-            except ValueError as exc:
-                raise ValueError(f"unparseable date '{value}'") from exc
-    raise ValueError(f"unsupported date type {type(value).__name__}")
+                d = datetime.strptime(value, fmt).date()
+                break
+            except ValueError:
+                continue
+        if d is None:
+            raise ValueError(f"unparseable date '{value}' (use YYYY-MM-DD or DD/MM/YYYY)")
+    else:
+        raise ValueError(f"unsupported date type {type(value).__name__}")
+    today = date.today()
+    if not (date(1950, 1, 1) <= d <= date(today.year + 1, 12, 31)):
+        raise ValueError(f"date '{d.isoformat()}' is out of range (1950 to next year)")
+    return d
 
 
 def _coerce_bool(value: Any) -> bool:
@@ -99,7 +106,11 @@ def _coerce_bool(value: Any) -> bool:
 
 
 def _string(value: Any) -> str:
-    return "" if value is None else str(value).strip()
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
 
 
 def _select_sheet(wb, name):  # type: ignore[no-untyped-def]
@@ -162,7 +173,7 @@ def parse_workbook(*, file_bytes: bytes, school: School) -> ParseResult:
         if not first_name:
             errs.append(RowError(row_num, "first_name", "required"))
         if gender not in Gender.values:
-            errs.append(RowError(row_num, "gender", f"must be one of {Gender.values}"))
+            errs.append(RowError(row_num, "gender", "must be Male or Female"))
 
         try:
             admission_date = _coerce_date(cell("admission_date"))
