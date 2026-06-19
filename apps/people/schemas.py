@@ -36,6 +36,11 @@ class StudentOut(CamelSchema):
 
     parents: list[ParentContactOut] = []
 
+    # Parent app login (temporary): the primary contact's phone + the admin-set
+    # password (blank until generated, or when provisioning is disabled).
+    parent_app_phone: str = ""
+    parent_app_password: str = ""
+
 
 class StudentListOut(Paginated[StudentOut]):
     pass

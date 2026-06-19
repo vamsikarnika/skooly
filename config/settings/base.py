@@ -146,6 +146,14 @@ TEACHER_PASSWORD_PROVISIONING = config(
     "TEACHER_PASSWORD_PROVISIONING", default=True, cast=bool
 )
 
+# TEMPORARY (mirrors the teacher flag): lets a school admin generate a parent's
+# first-login password for the parent app, until OTP onboarding ships. Flip to
+# False to disable the API + hide the admin UI. The stored plaintext passwords
+# should be cleared when this is retired.
+PARENT_PASSWORD_PROVISIONING = config(
+    "PARENT_PASSWORD_PROVISIONING", default=True, cast=bool
+)
+
 # CORS
 CORS_ALLOWED_ORIGINS = config(
     "CORS_ALLOWED_ORIGINS",

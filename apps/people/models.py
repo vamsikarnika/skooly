@@ -133,6 +133,10 @@ class Parent(TenantScopedModel):
     name = models.CharField(max_length=200)
     phone = models.CharField(max_length=20)
     email = models.EmailField(blank=True)
+    # TEMPORARY: the admin-set first-login password, kept in plaintext so the
+    # admin can read it back to hand to the parent. Goes away with OTP-based
+    # onboarding (see PARENT_PASSWORD_PROVISIONING).
+    app_password = models.CharField(max_length=64, blank=True)
     students = models.ManyToManyField(
         Student,
         through="people.ParentStudent",

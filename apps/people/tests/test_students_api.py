@@ -238,3 +238,64 @@ def test_export_students_returns_xlsx(client, admin_token_a, world_a):
     assert res.status_code == 200
     assert res["Content-Type"].startswith("application/vnd.openxmlformats-officedocument.spreadsheetml")
     assert res.content[:4] == b"PK\x03\x04"  # zip magic = xlsx
+
+
+@pytest.mark.django_db
+def test_reset_parent_password_provisions_login(client, admin_token_a, world_a):
+    """Admin generates a parent-app password; the parent can then log in, and
+    the password is readable back on the student detail."""
+    student = StudentFactory(
+        school=world_a["school"], parent1_name="Suresh Reddy",
+        parent1_phone="+919812345678", parent1_relation="Father",
+    )
+    res = client.post(
+        f"/api/v1/students/{student.id}/parents/reset-password",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 200, res.content
+    password = res.json()["password"]
+
+    login = client.post(
+        "/api/v1/parent/auth/login",
+        data={"phone": "+919812345678", "password": password},
+        content_type="application/json",
+    )
+    assert login.status_code == 200, login.content
+
+    detail = client.get(
+        f"/api/v1/students/{student.id}",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    ).json()
+    assert detail["parentAppPhone"] == "+919812345678"
+    assert detail["parentAppPassword"] == password  # retrievable
+
+
+@pytest.mark.django_db
+def test_reset_parent_password_requires_phone(client, admin_token_a, world_a):
+    student = StudentFactory(school=world_a["school"], parent1_name="No Phone", parent1_phone="")
+    res = client.post(
+        f"/api/v1/students/{student.id}/parents/reset-password",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 422
+
+
+@pytest.mark.django_db
+def test_reset_parent_password_teacher_forbidden(client, teacher_token_a, world_a):
+    student = StudentFactory(school=world_a["school"], parent1_phone="+919812345600")
+    res = client.post(
+        f"/api/v1/students/{student.id}/parents/reset-password",
+        HTTP_AUTHORIZATION=f"Bearer {teacher_token_a}",
+    )
+    assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_reset_parent_password_disabled_by_flag(client, admin_token_a, world_a, settings):
+    settings.PARENT_PASSWORD_PROVISIONING = False
+    student = StudentFactory(school=world_a["school"], parent1_phone="+919812345601")
+    res = client.post(
+        f"/api/v1/students/{student.id}/parents/reset-password",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 404

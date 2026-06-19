@@ -18,7 +18,16 @@ from apps.accounts.services import normalize_in_phone
 from apps.core.audit import log_action
 from apps.core.exceptions import Conflict, ValidationFailed
 from apps.core.helpers import get_in_tenant
-from apps.people.models import Gender, Student, StudentStatus, Teacher, TeacherStatus
+from apps.people.models import (
+    Gender,
+    Parent,
+    ParentStudent,
+    Relation,
+    Student,
+    StudentStatus,
+    Teacher,
+    TeacherStatus,
+)
 from apps.schools.models import School
 
 # Ambiguous characters (0/O, 1/l/I) are left out so a handed-out password is
@@ -335,4 +344,68 @@ def reset_teacher_login_password(*, school: School, actor_id: int, teacher_id: i
         school_id=school.id, user_id=actor_id,
         action="teacher.reset_password", model_name="Teacher", object_id=teacher.id,
     )
+    return password
+
+
+# ----- Parent app login (temporary admin-set password) -----------------------
+
+def _primary_parent_contact(student: Student) -> dict[str, str] | None:
+    """The student's parent contact that owns the app login: parent1 if it has
+    a phone, else parent2. None if neither has a phone."""
+    for prefix in ("parent1", "parent2"):
+        phone = getattr(student, f"{prefix}_phone", "")
+        if phone:
+            return {
+                "name": getattr(student, f"{prefix}_name", "") or "Parent",
+                "phone": phone,
+                "email": getattr(student, f"{prefix}_email", ""),
+                "relation": getattr(student, f"{prefix}_relation", ""),
+            }
+    return None
+
+
+@transaction.atomic
+def reset_parent_login_password(*, school: School, actor_id: int, student_id: int) -> str:
+    """Generate the parent-app login password for a student's primary parent.
+
+    One login per family (keyed by phone): provisions the Parent + login User on
+    demand, links this child, and stores the plaintext on the Parent so the admin
+    can read it back. Returns the password.
+    """
+    student = get_in_tenant(Student, school, pk=student_id)
+    contact = _primary_parent_contact(student)
+    if contact is None:
+        raise ValidationFailed("Add a parent phone number for this student first.")
+
+    if len([ch for ch in contact["phone"] if ch.isdigit()]) < 10:
+        raise ValidationFailed("The parent phone isn't a valid 10-digit number — fix it first.")
+    normalized = normalize_in_phone(contact["phone"])
+    password = _generate_temp_password()
+
+    user = User.objects.filter(phone=normalized).first()
+    if user is not None and user.role != Role.PARENT:
+        raise Conflict("That phone is already in use by another account.")
+    if user is None:
+        first, _, last = contact["name"].partition(" ")
+        user = User(
+            phone=normalized, role=Role.PARENT, school=school,
+            first_name=first, last_name=last, email=contact["email"], is_active=True,
+        )
+    user.set_password(password)
+    user.save()
+
+    parent = Parent.objects.filter(school=school, phone=normalized).first()
+    if parent is None:
+        parent = Parent(school=school, name=contact["name"], phone=normalized, email=contact["email"])
+    parent.user = user
+    parent.app_password = password
+    parent.save()
+
+    relation = contact["relation"] if contact["relation"] in Relation.values else Relation.GUARDIAN
+    ParentStudent.objects.get_or_create(
+        school=school, parent=parent, student=student, defaults={"relation": relation}
+    )
+
+    log_action(school_id=school.id, user_id=actor_id, action="parent.reset_password",
+               model_name="Parent", object_id=parent.id)
     return password

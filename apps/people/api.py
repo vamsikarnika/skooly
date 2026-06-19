@@ -130,7 +130,22 @@ def get_student(request: HttpRequest, student_id: int) -> dict:
     )
     if student is None:
         raise NotFound("Student not found.")
-    return services.student_to_dict(student)
+    return services.student_to_dict(student, include_parent_login=True)
+
+
+@router.post("/students/{student_id}/parents/reset-password", response=TempPasswordOut)
+def reset_parent_password(request: HttpRequest, student_id: int) -> TempPasswordOut:
+    """Generate the parent-app login password for this student's primary parent.
+    Admin-only; temporary, disabled (404) when PARENT_PASSWORD_PROVISIONING is off."""
+    if not settings.PARENT_PASSWORD_PROVISIONING:
+        raise NotFound("Parent password provisioning is disabled.")
+    _require_admin(request)
+    password = services_write.reset_parent_login_password(
+        school=_school(request),
+        actor_id=_user(request).id,
+        student_id=student_id,
+    )
+    return TempPasswordOut(password=password)
 
 
 @router.post("/students", response=StudentOut)

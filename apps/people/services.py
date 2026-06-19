@@ -6,7 +6,8 @@ from typing import Any
 
 from django.db.models import QuerySet
 
-from apps.people.models import Student, Teacher
+from apps.accounts.services import normalize_in_phone
+from apps.people.models import Parent, Student, Teacher
 
 
 def list_students(
@@ -40,11 +41,21 @@ def list_teachers(*, status: str | None = None) -> QuerySet[Teacher]:
     return qs
 
 
-def student_to_dict(student: Student) -> dict[str, Any]:
+def student_to_dict(student: Student, *, include_parent_login: bool = False) -> dict[str, Any]:
     enrollment = next(
         (e for e in student.enrollments.all() if e.status == "active"),
         None,
     )
+    # Parent app login (temporary): one login per family, keyed by the primary
+    # contact's phone. Only resolved on the detail view to avoid an N+1 in lists.
+    parent_app_phone = student.parent1_phone or student.parent2_phone or ""
+    parent_app_password = ""
+    if include_parent_login and parent_app_phone:
+        parent = Parent.objects.filter(
+            school_id=student.school_id, phone=normalize_in_phone(parent_app_phone)
+        ).first()
+        if parent is not None:
+            parent_app_password = parent.app_password
     parents: list[dict[str, Any]] = []
     if student.parent1_name:
         parents.append({
@@ -80,4 +91,6 @@ def student_to_dict(student: Student) -> dict[str, Any]:
         "section_name": enrollment.section.name if enrollment else None,
         "roll_number": enrollment.roll_number if enrollment else "",
         "parents": parents,
+        "parent_app_phone": parent_app_phone,
+        "parent_app_password": parent_app_password,
     }
