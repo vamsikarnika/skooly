@@ -840,9 +840,21 @@ def test_delete_scheduled_test_cascades(client: Client, world_a) -> None:
 
 
 @pytest.mark.django_db
-def test_delete_grading_test_conflict(client: Client, world_a) -> None:
+def test_delete_grading_test_allowed(client: Client, world_a) -> None:
+    """Grading (and live) tests are deletable — only published is blocked."""
     teacher, subject, section = _setup(world_a)
     test = _make_test(world_a, teacher, section, subject)  # past date -> "grading"
+    res = client.delete(
+        f"/api/v1/teacher/tests/{test.id}", **_auth(world_a["teacher_user"])
+    )
+    assert res.status_code == 200, res.content
+    assert Test.objects.all_tenants().filter(id=test.id).count() == 0
+
+
+@pytest.mark.django_db
+def test_delete_published_test_conflict(client: Client, world_a) -> None:
+    teacher, subject, section = _setup(world_a)
+    test = _make_test(world_a, teacher, section, subject, published=True)  # -> "published"
     res = client.delete(
         f"/api/v1/teacher/tests/{test.id}", **_auth(world_a["teacher_user"])
     )

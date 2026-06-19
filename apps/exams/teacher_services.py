@@ -191,22 +191,17 @@ def get_test(
     return _test_to_dict(test, section_label, test.subject.name, total, now)
 
 
-# Only these statuses are safe to delete; live/grading/published tests have
-# student-facing data we must not drop.
-_DELETABLE_STATUSES = {"draft", "scheduled"}
-
-
 def delete_test(*, teacher: Any, test_id: int) -> dict:
-    """Delete a draft/scheduled test the teacher owns, cascading questions,
-    scores and submissions. 404 unknown, 403 another teacher's, 409 not deletable."""
+    """Delete a test the teacher owns, cascading questions, scores and
+    submissions. Everything is deletable except a published test (its results
+    are out). 404 unknown, 403 another teacher's, 409 published."""
     test = Test.objects.filter(id=test_id).select_related("section").first()
     if test is None:
         raise NotFound("Test not found.")
     if test.created_by_id != teacher.id:
         raise Forbidden("You can't delete another teacher's test.")
-    status = _derive_status(test, timezone.now())
-    if status not in _DELETABLE_STATUSES:
-        raise Conflict(f"A {status} test can't be deleted.")
+    if _derive_status(test, timezone.now()) == "published":
+        raise Conflict("A published test can't be deleted.")
     # FKs from Question/TestScore/TestSubmission cascade, so no orphans remain.
     test.delete()
     return {"message": "Test deleted"}
