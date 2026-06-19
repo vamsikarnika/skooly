@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from django.db import transaction
 
 from apps.academics.models import (
     Class,
+    DayOfWeek,
     Section,
     StudentEnrollment,
     Subject,
     SubjectClassMapping,
     TeacherAssignment,
+    TimetablePeriod,
 )
 from apps.core.audit import log_action
 from apps.core.exceptions import Conflict, NotFound, ValidationFailed
@@ -216,6 +219,11 @@ def create_teacher_assignment(
     assignment = TeacherAssignment.objects.create(
         school=school, teacher=teacher, subject=subject, section=section, academic_year=year
     )
+    # Keep the timetable's teacher in sync so "today's schedule" stays correct
+    # without re-entering the timetable.
+    TimetablePeriod.objects.filter(school=school, section=section, subject=subject).update(
+        teacher=teacher
+    )
     log_action(school_id=school.id, user_id=actor_id, action="teacher_assignment.create",
                model_name="TeacherAssignment", object_id=assignment.id)
     return assignment
@@ -224,6 +232,116 @@ def create_teacher_assignment(
 @transaction.atomic
 def delete_teacher_assignment(*, school: School, actor_id: int, assignment_id: int) -> None:
     assignment = get_in_tenant(TeacherAssignment, school, pk=assignment_id)
+    # Drop the teacher from any timetable periods that referenced this assignment.
+    TimetablePeriod.objects.filter(
+        school=school, section=assignment.section, subject=assignment.subject
+    ).update(teacher=None)
     assignment.soft_delete()
     log_action(school_id=school.id, user_id=actor_id, action="teacher_assignment.delete",
                model_name="TeacherAssignment", object_id=assignment.id)
+
+
+# ----- Section timetable (weekly grid) ---------------------------------------
+
+def _parse_hhmm(value: str, field: str):  # type: ignore[no-untyped-def]
+    try:
+        return datetime.strptime(value, "%H:%M").time()
+    except (ValueError, TypeError) as exc:
+        raise ValidationFailed(f"Invalid time '{value}' for {field} (use HH:MM).") from exc
+
+
+def get_section_timetable(*, school: School, section_id: int) -> dict[str, Any]:
+    """The section's weekly timetable as a period-time template (`slots`) plus
+    one `entry` per filled day/period cell. Times are returned as HH:MM."""
+    section = get_in_tenant(Section, school, pk=section_id)
+    periods = (
+        TimetablePeriod.objects.filter(school=school, section=section)
+        .select_related("subject", "teacher")
+        .order_by("period_number", "day_of_week")
+    )
+    slots: dict[int, dict[str, Any]] = {}
+    entries: list[dict[str, Any]] = []
+    for p in periods:
+        slots.setdefault(
+            p.period_number,
+            {
+                "period_number": p.period_number,
+                "start_time": p.start_time.strftime("%H:%M"),
+                "end_time": p.end_time.strftime("%H:%M"),
+            },
+        )
+        entries.append({
+            "day_of_week": p.day_of_week,
+            "period_number": p.period_number,
+            "subject_id": p.subject_id,
+            "subject_name": p.subject.name if p.subject else "",
+            "teacher_id": p.teacher_id,
+            "teacher_name": p.teacher.full_name if p.teacher else None,
+        })
+    return {
+        "slots": sorted(slots.values(), key=lambda s: s["period_number"]),
+        "entries": entries,
+    }
+
+
+@transaction.atomic
+def save_section_timetable(
+    *, school: School, actor_id: int, section_id: int, data: dict[str, Any]
+) -> None:
+    """Replace a section's weekly timetable. Each entry's teacher is resolved
+    from the current (section, subject) assignment, so 'today's schedule' in the
+    teacher app is populated automatically."""
+    section = get_in_tenant(Section, school, pk=section_id)
+
+    slot_by_num: dict[int, dict[str, Any]] = {}
+    for slot in data.get("slots", []):
+        pn = slot["period_number"]
+        if pn in slot_by_num:
+            raise ValidationFailed(f"Duplicate period number {pn}.")
+        start = _parse_hhmm(slot["start_time"], f"period {pn} start")
+        end = _parse_hhmm(slot["end_time"], f"period {pn} end")
+        if start >= end:
+            raise ValidationFailed(f"Period {pn} start time must be before its end time.")
+        slot_by_num[pn] = {"start": start, "end": end}
+
+    valid_subject_ids = set(
+        Subject.objects.filter(school=school).values_list("id", flat=True)
+    )
+    teacher_by_subject = dict(
+        TeacherAssignment.objects.filter(school=school, section=section).values_list(
+            "subject_id", "teacher_id"
+        )
+    )
+
+    rows: list[TimetablePeriod] = []
+    seen_cells: set[tuple[int, int]] = set()
+    for entry in data.get("entries", []):
+        dow = entry["day_of_week"]
+        pn = entry["period_number"]
+        subject_id = entry["subject_id"]
+        if dow not in DayOfWeek.values:
+            raise ValidationFailed(f"Invalid day of week {dow}.")
+        if pn not in slot_by_num:
+            raise ValidationFailed(f"Entry references undefined period {pn}.")
+        if subject_id not in valid_subject_ids:
+            raise ValidationFailed("Entry references a subject from another school.")
+        cell = (dow, pn)
+        if cell in seen_cells:
+            raise ValidationFailed(f"Two subjects placed in day {dow}, period {pn}.")
+        seen_cells.add(cell)
+        slot = slot_by_num[pn]
+        rows.append(TimetablePeriod(
+            school=school,
+            section=section,
+            day_of_week=dow,
+            period_number=pn,
+            subject_id=subject_id,
+            teacher_id=teacher_by_subject.get(subject_id),
+            start_time=slot["start"],
+            end_time=slot["end"],
+        ))
+
+    TimetablePeriod.objects.filter(school=school, section=section).delete()
+    TimetablePeriod.objects.bulk_create(rows)
+    log_action(school_id=school.id, user_id=actor_id, action="timetable.save",
+               model_name="Section", object_id=section.id, changes={"periods": len(rows)})

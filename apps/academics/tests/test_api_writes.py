@@ -308,3 +308,120 @@ def test_teacher_cannot_create_class(client, teacher_token_a, world_a):
         HTTP_AUTHORIZATION=f"Bearer {teacher_token_a}",
     )
     assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_section_timetable_save_and_read(client, admin_token_a, world_a):
+    """Save a weekly timetable; teacher is auto-derived from the subject's
+    assignment so the teacher app's schedule is populated."""
+    from apps.academics.models import TeacherAssignment, TimetablePeriod
+    from apps.people.tests.factories import TeacherFactory
+
+    school = world_a["school"]
+    section = world_a["section_a"]
+    maths = SubjectFactory(school=school, name="Maths")
+    teacher = TeacherFactory(school=school, phone="+918888777000")
+    TeacherAssignment.objects.create(
+        school=school, teacher=teacher, subject=maths, section=section,
+        academic_year=world_a["year"],
+    )
+
+    payload = {
+        "slots": [{"periodNumber": 1, "startTime": "09:00", "endTime": "09:45"}],
+        "entries": [{"dayOfWeek": 1, "periodNumber": 1, "subjectId": maths.id}],
+    }
+    res = client.put(
+        f"/api/v1/sections/{section.id}/timetable",
+        data=payload,
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 200, res.content
+    body = res.json()
+    assert body["slots"][0]["startTime"] == "09:00"
+    assert body["entries"][0]["subjectName"] == "Maths"
+    # Teacher auto-derived from the assignment → drives the teacher app.
+    assert body["entries"][0]["teacherId"] == teacher.id
+
+    period = TimetablePeriod.objects.all_tenants().get(section=section, day_of_week=1, period_number=1)
+    assert period.teacher_id == teacher.id
+
+
+@pytest.mark.django_db
+def test_section_timetable_replaces(client, admin_token_a, world_a):
+    """A second save fully replaces the prior timetable."""
+    from apps.academics.models import TimetablePeriod
+
+    school = world_a["school"]
+    section = world_a["section_a"]
+    sci = SubjectFactory(school=school, name="Science")
+    tel = SubjectFactory(school=school, name="Telugu")
+
+    def _save(subject_id):
+        return client.put(
+            f"/api/v1/sections/{section.id}/timetable",
+            data={
+                "slots": [{"periodNumber": 1, "startTime": "10:00", "endTime": "10:45"}],
+                "entries": [{"dayOfWeek": 2, "periodNumber": 1, "subjectId": subject_id}],
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+        )
+
+    assert _save(sci.id).status_code == 200
+    assert _save(tel.id).status_code == 200
+    rows = TimetablePeriod.objects.all_tenants().filter(section=section)
+    assert rows.count() == 1
+    assert rows.first().subject_id == tel.id
+
+
+@pytest.mark.django_db
+def test_section_timetable_rejects_duplicate_cell(client, admin_token_a, world_a):
+    school = world_a["school"]
+    section = world_a["section_a"]
+    s = SubjectFactory(school=school, name="Hindi")
+    res = client.put(
+        f"/api/v1/sections/{section.id}/timetable",
+        data={
+            "slots": [{"periodNumber": 1, "startTime": "09:00", "endTime": "09:45"}],
+            "entries": [
+                {"dayOfWeek": 1, "periodNumber": 1, "subjectId": s.id},
+                {"dayOfWeek": 1, "periodNumber": 1, "subjectId": s.id},
+            ],
+        },
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 422
+
+
+@pytest.mark.django_db
+def test_changing_subject_teacher_resyncs_timetable(client, admin_token_a, world_a):
+    """Assigning a teacher to a subject updates existing timetable periods."""
+    from apps.academics.models import TimetablePeriod
+    from apps.people.tests.factories import TeacherFactory
+
+    school = world_a["school"]
+    section = world_a["section_a"]
+    music = SubjectFactory(school=school, name="Music")
+    # Timetable saved while the subject has no teacher → period.teacher is null.
+    client.put(
+        f"/api/v1/sections/{section.id}/timetable",
+        data={
+            "slots": [{"periodNumber": 1, "startTime": "09:00", "endTime": "09:45"}],
+            "entries": [{"dayOfWeek": 3, "periodNumber": 1, "subjectId": music.id}],
+        },
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert TimetablePeriod.objects.all_tenants().get(section=section).teacher_id is None
+
+    teacher = TeacherFactory(school=school, phone="+918888777111")
+    res = client.post(
+        "/api/v1/teacher-assignments",
+        data={"teacherId": teacher.id, "subjectId": music.id, "sectionId": section.id},
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {admin_token_a}",
+    )
+    assert res.status_code == 200, res.content
+    assert TimetablePeriod.objects.all_tenants().get(section=section).teacher_id == teacher.id

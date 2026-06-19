@@ -40,3 +40,23 @@ class SectionSubjectTeacherOut(CamelSchema):
     assignment_id: int | None = None
     teacher_id: int | None = None
     teacher_name: str | None = None
+
+
+class TimetableSlotOut(CamelSchema):
+    period_number: int
+    start_time: str  # "HH:MM"
+    end_time: str  # "HH:MM"
+
+
+class TimetableEntryOut(CamelSchema):
+    day_of_week: int  # 1=Mon … 6=Sat
+    period_number: int
+    subject_id: int
+    subject_name: str
+    teacher_id: int | None = None
+    teacher_name: str | None = None
+
+
+class SectionTimetableOut(CamelSchema):
+    slots: list[TimetableSlotOut] = []
+    entries: list[TimetableEntryOut] = []

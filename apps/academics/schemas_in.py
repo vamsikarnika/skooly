@@ -51,3 +51,20 @@ class TeacherAssignmentRequest(CamelSchema):
     teacher_id: int
     subject_id: int
     section_id: int
+
+
+class TimetableSlotIn(CamelSchema):
+    period_number: int
+    start_time: str  # "HH:MM"
+    end_time: str  # "HH:MM"
+
+
+class TimetableEntryIn(CamelSchema):
+    day_of_week: int  # 1=Mon … 6=Sat
+    period_number: int
+    subject_id: int
+
+
+class SectionTimetableIn(CamelSchema):
+    slots: list[TimetableSlotIn] = []
+    entries: list[TimetableEntryIn] = []
