@@ -14,6 +14,7 @@ from apps.academics.schemas import (
     ClassOut,
     SectionOut,
     SectionSubjectTeacherOut,
+    SectionTimetableOut,
     SubjectOut,
 )
 from apps.academics.schemas_in import (
@@ -21,6 +22,7 @@ from apps.academics.schemas_in import (
     ClassSubjectRequest,
     ClassUpdateRequest,
     SectionCreateRequest,
+    SectionTimetableIn,
     SectionUpdateRequest,
     SubjectCreateRequest,
     SubjectUpdateRequest,
@@ -219,6 +221,32 @@ def delete_section(request: HttpRequest, section_id: int) -> ActionResponse:
         school=_school(request), actor_id=_user(request).id, section_id=section_id
     )
     return ActionResponse(success=True, message="Section deleted.")
+
+
+# ----- Section timetable -----------------------------------------------------
+
+@router.get("/sections/{section_id}/timetable", response=SectionTimetableOut)
+def get_section_timetable(request: HttpRequest, section_id: int) -> SectionTimetableOut:
+    """The section's weekly timetable: period time-slots + filled day/period cells."""
+    data = services_write.get_section_timetable(school=_school(request), section_id=section_id)
+    return SectionTimetableOut(**data)
+
+
+@router.put("/sections/{section_id}/timetable", response=SectionTimetableOut)
+def save_section_timetable(
+    request: HttpRequest, section_id: int, payload: SectionTimetableIn
+) -> SectionTimetableOut:
+    """Replace the section's weekly timetable. Each cell's teacher is resolved
+    from the subject's assignment, so the teacher app's schedule is populated."""
+    _require_admin(request)
+    services_write.save_section_timetable(
+        school=_school(request),
+        actor_id=_user(request).id,
+        section_id=section_id,
+        data=payload.model_dump(by_alias=False),
+    )
+    data = services_write.get_section_timetable(school=_school(request), section_id=section_id)
+    return SectionTimetableOut(**data)
 
 
 # ----- Subjects --------------------------------------------------------------
