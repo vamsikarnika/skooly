@@ -10,6 +10,7 @@ from apps.exams import teacher_services
 from apps.exams.teacher_schemas import (
     CreateTestIn,
     MarksRosterItemOut,
+    MessageOut,
     QuestionOut,
     ReportCardRosterOut,
     ReportCardSectionOut,
@@ -58,6 +59,11 @@ def get_test(request: HttpRequest, test_id: int) -> dict:
         test_id=test_id,
         academic_year_id=school.current_academic_year_id if school else None,
     )
+
+
+@router.delete("/tests/{test_id}", response=MessageOut)
+def delete_test(request: HttpRequest, test_id: int) -> dict:
+    return teacher_services.delete_test(teacher=get_teacher(request), test_id=test_id)
 
 
 @router.get("/tests/{test_id}/marks", response=list[MarksRosterItemOut])

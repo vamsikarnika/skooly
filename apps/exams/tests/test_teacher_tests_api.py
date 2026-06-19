@@ -814,3 +814,71 @@ def test_cross_tenant_questions_404(client: Client, world_a, world_b) -> None:
         **_auth(world_a["teacher_user"]),
     )
     assert res.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# DELETE /teacher/tests/{id}
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_delete_scheduled_test_cascades(client: Client, world_a) -> None:
+    teacher, subject, section = _setup(world_a)
+    test = _make_test(
+        world_a, teacher, section, subject, test_date=date.today() + timedelta(days=5)
+    )  # offline + future + unpublished -> "scheduled"
+    student = _enroll(world_a, section)
+    TestScoreFactory(school=world_a["school"], test=test, student=student)
+
+    res = client.delete(
+        f"/api/v1/teacher/tests/{test.id}", **_auth(world_a["teacher_user"])
+    )
+    assert res.status_code == 200, res.content
+    assert res.json() == {"message": "Test deleted"}
+    assert Test.objects.all_tenants().filter(id=test.id).count() == 0
+    # Dependent rows cascade — no orphans.
+    assert TestScore.objects.all_tenants().filter(test_id=test.id).count() == 0
+
+
+@pytest.mark.django_db
+def test_delete_grading_test_conflict(client: Client, world_a) -> None:
+    teacher, subject, section = _setup(world_a)
+    test = _make_test(world_a, teacher, section, subject)  # past date -> "grading"
+    res = client.delete(
+        f"/api/v1/teacher/tests/{test.id}", **_auth(world_a["teacher_user"])
+    )
+    assert res.status_code == 409
+    assert res.json()["error"]["code"] == "CONFLICT"
+    assert Test.objects.all_tenants().filter(id=test.id).count() == 1
+
+
+@pytest.mark.django_db
+def test_delete_other_teachers_test_forbidden(client: Client, world_a) -> None:
+    teacher, subject, section = _setup(world_a)
+    other = TeacherFactory(school=world_a["school"], phone="+919900112233")
+    test = _make_test(
+        world_a, other, section, subject, test_date=date.today() + timedelta(days=5)
+    )
+    res = client.delete(
+        f"/api/v1/teacher/tests/{test.id}", **_auth(world_a["teacher_user"])
+    )
+    assert res.status_code == 403
+    assert res.json()["error"]["code"] == "FORBIDDEN"
+    assert Test.objects.all_tenants().filter(id=test.id).count() == 1
+
+
+@pytest.mark.django_db
+def test_delete_unknown_test_404(client: Client, world_a) -> None:
+    _setup(world_a)
+    res = client.delete("/api/v1/teacher/tests/999999", **_auth(world_a["teacher_user"]))
+    assert res.status_code == 404
+    assert res.json()["error"]["code"] == "NOT_FOUND"
+
+
+@pytest.mark.django_db
+def test_delete_test_requires_auth(client: Client, world_a) -> None:
+    teacher, subject, section = _setup(world_a)
+    test = _make_test(
+        world_a, teacher, section, subject, test_date=date.today() + timedelta(days=5)
+    )
+    res = client.delete(f"/api/v1/teacher/tests/{test.id}")  # no token
+    assert res.status_code == 401
