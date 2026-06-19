@@ -99,6 +99,10 @@ class SaveQuestionsOut(CamelSchema):
     published: bool
 
 
+class MessageOut(CamelSchema):
+    message: str
+
+
 # ---------------------------------------------------------------------------
 # Marks roster (offline tests)
 # ---------------------------------------------------------------------------
