@@ -52,7 +52,9 @@ def _parent_with_child(world: dict, phone: str = "+919876512345"):
     return user, student
 
 
-def _make_online_test(world, *, name="Quiz", duration_min=20, deadline_in_hours=24):
+def _make_online_test(
+    world, *, name="Quiz", duration_min=20, deadline_in_hours=24, available_from_in_hours=-1
+):
     from apps.academics.models import Subject
     school, section = world["school"], world["section_a"]
     subject, _ = Subject.objects.all_tenants().get_or_create(school=school, name="Mathematics")
@@ -60,7 +62,7 @@ def _make_online_test(world, *, name="Quiz", duration_min=20, deadline_in_hours=
         school=school, section=section, subject=subject, name=name,
         test_type=TestType.OTHER, mode=TestMode.ONLINE,
         test_date=timezone.now().date(),
-        available_from=timezone.now() - timezone.timedelta(hours=1),
+        available_from=timezone.now() + timezone.timedelta(hours=available_from_in_hours),
         available_until=timezone.now() + timezone.timedelta(hours=deadline_in_hours),
         duration_min=duration_min, max_marks=2,
         published_at=timezone.now(),
@@ -112,6 +114,8 @@ def test_list_groups_pending_vs_completed(client: Client, world_a) -> None:
     by_status = {t["title"]: t for t in res.json()}
     assert by_status["Pending quiz"]["status"] == "pending"
     assert by_status["Pending quiz"]["score"] is None
+    # Scheduled start is exposed so the app can gate the Start button.
+    assert by_status["Pending quiz"]["availableFrom"] is not None
     assert by_status["Completed quiz"]["status"] == "completed"
     assert by_status["Completed quiz"]["score"] == 1
     # The completed test exposes the submitted-at timestamp.
@@ -170,15 +174,31 @@ def test_start_is_idempotent_and_resumes(client: Client, world_a) -> None:
 
 
 @pytest.mark.django_db
-def test_start_rejects_past_deadline(client: Client, world_a) -> None:
+def test_start_rejects_before_open(client: Client, world_a) -> None:
     user, student = _parent_with_child(world_a)
-    test = _make_online_test(world_a, deadline_in_hours=-1)
+    test = _make_online_test(world_a, available_from_in_hours=2, deadline_in_hours=24)
     _add_mcq(test)
     res = client.post(
         f"/api/v1/parent/children/{student.id}/online-tests/{test.id}/start",
         content_type="application/json", **_auth(user),
     )
-    assert res.status_code == 422
+    assert res.status_code == 409
+    body = res.json()
+    assert body["error"]["code"] == "TEST_NOT_OPEN"
+    assert "opens on" in body["error"]["message"]
+
+
+@pytest.mark.django_db
+def test_start_rejects_past_deadline(client: Client, world_a) -> None:
+    user, student = _parent_with_child(world_a)
+    test = _make_online_test(world_a, available_from_in_hours=-2, deadline_in_hours=-1)
+    _add_mcq(test)
+    res = client.post(
+        f"/api/v1/parent/children/{student.id}/online-tests/{test.id}/start",
+        content_type="application/json", **_auth(user),
+    )
+    assert res.status_code == 409
+    assert res.json()["error"]["code"] == "TEST_CLOSED"
 
 
 @pytest.mark.django_db
