@@ -11,7 +11,9 @@
 from __future__ import annotations
 
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Count
 from django.http import HttpRequest
@@ -19,7 +21,7 @@ from django.utils import timezone
 from ninja import Router
 
 from apps.accounts.parent_auth import get_parent_child, parent_jwt_auth
-from apps.core.exceptions import Conflict, NotFound, ValidationFailed
+from apps.core.exceptions import APIError, Conflict, NotFound, ValidationFailed
 from apps.core.schemas import CamelSchema
 from apps.exams.models import (
     MCQOption,
@@ -201,6 +203,7 @@ class OnlineTestListItem(CamelSchema):
     subject: str
     title: str
     duration_min: int
+    available_from: str | None = None  # ISO scheduled start; null = open immediately
     deadline: str | None  # ISO datetime when available_until is set
     max_marks: int
     questions: int
@@ -331,6 +334,7 @@ def list_online_tests(request: HttpRequest, child_id: int) -> list[dict]:
             "subject": t.subject.name,
             "title": t.name,
             "duration_min": t.duration_min,
+            "available_from": t.available_from.isoformat() if t.available_from else None,
             "deadline": t.available_until.isoformat() if t.available_until else None,
             "max_marks": t.max_marks or 0,
             "questions": t.qcount,
@@ -367,6 +371,24 @@ def _serialize_question_for_take(question: Question, saved: SubmissionAnswer | N
     }
 
 
+class TestNotOpen(APIError):
+    status_code = 409
+    code = "TEST_NOT_OPEN"
+
+
+class TestClosed(APIError):
+    status_code = 409
+    code = "TEST_CLOSED"
+
+
+def _fmt_when(dt) -> str:  # type: ignore[no-untyped-def]
+    """A student-friendly local time, e.g. '20 Jun, 12:20 AM' (display tz)."""
+    local = dt.astimezone(ZoneInfo(settings.DISPLAY_TIME_ZONE))
+    hour12 = local.hour % 12 or 12
+    ampm = "AM" if local.hour < 12 else "PM"
+    return f"{local.day} {local:%b}, {hour12}:{local.minute:02d} {ampm}"
+
+
 @router.post("/children/{child_id}/online-tests/{test_id}/start", response=StartResponse)
 def start_online_test(request: HttpRequest, child_id: int, test_id: int) -> dict:
     student = get_parent_child(request, child_id)
@@ -374,12 +396,13 @@ def start_online_test(request: HttpRequest, child_id: int, test_id: int) -> dict
     test = _resolve_online_test(student, school, test_id)
     if test is None:
         raise NotFound("No such online test for this child.")
-    # Reject if the test isn't yet open or already past its deadline.
+    # Server-side gate behind the UI (which can be stale): reject before the
+    # window opens or after it closes, with a message the app shows verbatim.
     now = timezone.now()
     if test.available_from and now < test.available_from:
-        raise ValidationFailed("This test hasn't opened yet.")
+        raise TestNotOpen(f"This test opens on {_fmt_when(test.available_from)}.")
     if test.available_until and now > test.available_until:
-        raise ValidationFailed("This test's deadline has passed.")
+        raise TestClosed(f"This test closed on {_fmt_when(test.available_until)}.")
 
     # Find-or-create the submission; resumes if it already exists.
     submission, _created = TestSubmission.objects.get_or_create(
