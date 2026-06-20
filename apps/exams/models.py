@@ -135,6 +135,9 @@ class Question(TenantScopedModel):
     topic = models.CharField(max_length=80, blank=True, default="")
     # For short-answer questions — case-insensitive match at grading time
     correct_answer = models.CharField(max_length=200, blank=True, default="")
+    # Optional rationale for the answer (e.g. copied from a bank question and
+    # editable per-test). Not shown to students while attempting.
+    explanation = models.TextField(blank=True, default="")
 
     class Meta:
         db_table = "test_questions"

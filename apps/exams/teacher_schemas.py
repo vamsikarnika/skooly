@@ -74,6 +74,7 @@ class QuestionIn(CamelSchema):
     options: list[MCQOptionIn] | None = None
     # Short answer
     correct_answer: str = ""
+    explanation: str = ""
 
 
 class QuestionOut(CamelSchema):
@@ -86,6 +87,7 @@ class QuestionOut(CamelSchema):
     topic: str
     options: list[MCQOptionOut]
     correct_answer: str
+    explanation: str = ""
 
 
 class SaveQuestionsIn(CamelSchema):
