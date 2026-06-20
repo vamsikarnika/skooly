@@ -104,6 +104,69 @@ class MessageOut(CamelSchema):
 
 
 # ---------------------------------------------------------------------------
+# Question bank
+# ---------------------------------------------------------------------------
+
+
+class BankOptionIn(CamelSchema):
+    text: str
+    is_correct: bool
+
+
+class BankOptionOut(CamelSchema):
+    text: str
+    is_correct: bool
+
+
+class BankQuestionOut(CamelSchema):
+    id: str
+    source_id: str
+    scope: str              # catalog | mine
+    subject: str
+    grade: int | None = None
+    board: str
+    chapter_number: int | None = None
+    chapter_name: str
+    topic: str
+    question_type: str      # mcq | short_answer
+    difficulty: str
+    text: str
+    options: list[BankOptionOut]
+    correct_answer: str
+    explanation: str
+    tags: list[str]
+
+
+class BankQuestionListOut(CamelSchema):
+    items: list[BankQuestionOut]
+    total: int
+
+
+class BankChapterOut(CamelSchema):
+    number: int | None = None
+    name: str
+
+
+class BankFacetsOut(CamelSchema):
+    subjects: list[str]
+    chapters: list[BankChapterOut]
+    topics: list[str]
+
+
+class BankQuestionIn(CamelSchema):
+    subject: str
+    question_type: str      # mcq | short_answer
+    text: str
+    options: list[BankOptionIn] | None = None
+    correct_answer: str = ""
+    difficulty: str = ""
+    chapter_name: str = ""
+    topic: str = ""
+    explanation: str = ""
+    tags: list[str] = []
+
+
+# ---------------------------------------------------------------------------
 # Marks roster (offline tests)
 # ---------------------------------------------------------------------------
 

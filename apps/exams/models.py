@@ -170,6 +170,93 @@ class MCQOption(models.Model):
         return f"{['A','B','C','D'][self.display_order]}. {self.text}{marker}"
 
 
+class BankQuestion(models.Model):
+    """A reusable question in the question bank.
+
+    Two scopes, distinguished by ``school`` / ``created_by``:
+    * Global catalog  — school=None, created_by=None. Authored by SmartSkool
+      admin, readable by every school. Seeded via ``import_question_bank``.
+    * Teacher-private — school=<teacher's school>, created_by=<teacher>.
+      Visible only to the teacher who created it.
+
+    NOT a TenantScopedModel: the global catalog belongs to no school, and the
+    tenant manager fails closed (it would hide global rows). Tenant isolation
+    for private rows is enforced in the service layer (visibility = enabled AND
+    (global OR own)).
+
+    Picking a bank question into a test COPIES its content into the test's own
+    Question/MCQOption rows (see teacher_services.save_questions); edits a
+    teacher makes there never touch the bank row.
+    """
+
+    # -- Scope / provenance --------------------------------------------------
+    school = models.ForeignKey(
+        "schools.School",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="bank_questions",
+        help_text="Null = global SmartSkool catalog.",
+    )
+    created_by = models.ForeignKey(
+        "people.Teacher",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="bank_questions",
+        help_text="Null = admin/global; set = teacher-private.",
+    )
+    # Stable id from the source JSONL ("ps-ch1-mcq-01") for idempotent
+    # re-import. Blank for teacher-authored questions.
+    source_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    # Admin/owner moderation toggle. Only enabled questions are shown to teachers.
+    enabled = models.BooleanField(default=True, db_index=True)
+
+    # -- Curriculum metadata (filters) ---------------------------------------
+    subject = models.CharField(max_length=80, db_index=True)  # "Physical Science"
+    grade = models.PositiveSmallIntegerField(null=True, blank=True)
+    board = models.CharField(max_length=120, blank=True, default="")
+    chapter_number = models.PositiveSmallIntegerField(null=True, blank=True)
+    chapter_name = models.CharField(max_length=200, blank=True, default="", db_index=True)
+    topic = models.CharField(max_length=200, blank=True, default="")
+
+    # -- Content (mirrors the test Question shape) ---------------------------
+    question_type = models.CharField(max_length=16, choices=QuestionType.choices)
+    difficulty = models.CharField(
+        max_length=8, choices=Difficulty.choices, blank=True, default="", db_index=True
+    )
+    text = models.TextField()
+    # MCQ options, ordered A->D: [{"text": str, "is_correct": bool}, ...]
+    options = models.JSONField(default=list, blank=True)
+    # Short-answer expected answer (blank for MCQ).
+    correct_answer = models.CharField(max_length=200, blank=True, default="")
+    explanation = models.TextField(blank=True, default="")
+    tags = models.JSONField(default=list, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "bank_questions"
+        ordering = ["subject", "chapter_number", "id"]
+        indexes = [
+            models.Index(fields=["subject", "chapter_name"]),
+            models.Index(fields=["created_by"]),
+        ]
+        constraints = [
+            # One row per source question in the global catalog -> re-import upserts.
+            models.UniqueConstraint(
+                fields=["source_id"],
+                condition=models.Q(created_by__isnull=True) & ~models.Q(source_id=""),
+                name="uniq_global_bank_source_id",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        scope = "global" if self.created_by_id is None else f"teacher:{self.created_by_id}"
+        return f"BankQuestion[{scope}] {self.text[:60]}"
+
+
 class ReportCardTerm(models.TextChoices):
     """AP State Board terms. Annual = year-end summary across terms."""
 
