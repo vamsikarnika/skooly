@@ -134,31 +134,48 @@ def test_scope_filter(client: Client, world_a) -> None:
 @pytest.mark.django_db
 def test_content_filters(client: Client, world_a) -> None:
     _teacher(world_a)
-    _global_mcq(source_id="g1", subject="Physical Science", chapter_name="Force", difficulty="easy")
+    _global_mcq(source_id="g1", subject="Physical Science", chapter_name="Force", topic="What is Force", difficulty="easy")
     _global_mcq(
-        source_id="g2", subject="Physical Science", chapter_name="Friction",
+        source_id="g2", subject="Physical Science", chapter_name="Friction", topic="Drag",
         difficulty="hard", text="Friction opposes motion.",
     )
-    _global_mcq(source_id="g3", subject="Maths", chapter_name="Algebra", difficulty="easy")
+    _global_mcq(source_id="g3", subject="Maths", chapter_name="Algebra", topic="Linear", difficulty="easy")
     auth = _auth(world_a["teacher_user"])
 
+    # No subject filter → all subjects visible (teacher applies their own filters).
+    assert client.get(URL, **auth).json()["total"] == 3
     assert client.get(f"{URL}?subject=physical science", **auth).json()["total"] == 2
-    assert client.get(f"{URL}?subject=Physical Science&chapter=Fric", **auth).json()["total"] == 1
+    # Filters are exact matches on facet values (no partial / text search).
+    assert client.get(f"{URL}?subject=Physical Science&chapter=Friction", **auth).json()["total"] == 1
+    assert client.get(f"{URL}?topic=Drag", **auth).json()["total"] == 1
     assert client.get(f"{URL}?difficulty=easy", **auth).json()["total"] == 2
-    assert client.get(f"{URL}?q=friction", **auth).json()["total"] == 1
 
 
 @pytest.mark.django_db
-def test_facets(client: Client, world_a) -> None:
+def test_facets_cascade(client: Client, world_a) -> None:
     _teacher(world_a)
-    _global_mcq(source_id="g1", chapter_number=1, chapter_name="Force", topic="What is Force")
-    _global_mcq(source_id="g2", chapter_number=2, chapter_name="Friction", topic="Drag")
-    res = client.get(f"{URL}/facets?subject=Physical Science", **_auth(world_a["teacher_user"]))
-    assert res.status_code == 200
-    body = res.json()
-    assert body["subjects"] == ["Physical Science"]
-    assert [c["name"] for c in body["chapters"]] == ["Force", "Friction"]
-    assert set(body["topics"]) == {"What is Force", "Drag"}
+    _global_mcq(source_id="g1", subject="Physical Science", chapter_number=1, chapter_name="Force", topic="What is Force", difficulty="easy")
+    _global_mcq(source_id="g2", subject="Physical Science", chapter_number=2, chapter_name="Friction", topic="Drag", difficulty="hard")
+    _global_mcq(source_id="g3", subject="Maths", chapter_number=1, chapter_name="Algebra", topic="Linear", difficulty="medium")
+    auth = _auth(world_a["teacher_user"])
+
+    # No filter: subjects always full; chapters/topics/difficulties span everything.
+    allf = client.get(f"{URL}/facets", **auth).json()
+    assert allf["subjects"] == ["Maths", "Physical Science"]
+    assert {c["name"] for c in allf["chapters"]} == {"Force", "Friction", "Algebra"}
+    assert allf["difficulties"] == ["easy", "medium", "hard"]  # pedagogical order
+
+    # Narrow to a subject: chapters/topics/difficulties cascade to it.
+    ps = client.get(f"{URL}/facets?subject=Physical Science", **auth).json()
+    assert ps["subjects"] == ["Maths", "Physical Science"]  # subjects stay full
+    assert [c["name"] for c in ps["chapters"]] == ["Force", "Friction"]
+    assert set(ps["topics"]) == {"What is Force", "Drag"}
+    assert ps["difficulties"] == ["easy", "hard"]
+
+    # Narrow further by chapter: topics cascade to that chapter only.
+    chap = client.get(f"{URL}/facets?subject=Physical Science&chapter=Force", **auth).json()
+    assert chap["topics"] == ["What is Force"]
+    assert chap["difficulties"] == ["easy"]
 
 
 # ---------------------------------------------------------------------------

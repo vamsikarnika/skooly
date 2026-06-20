@@ -135,9 +135,10 @@ def save_questions(
 def question_bank_facets(
     request: HttpRequest,
     subject: str = Query(default=None),  # type: ignore[assignment]
+    chapter: str = Query(default=None),  # type: ignore[assignment]
 ) -> dict:
     return question_bank_services.facets(
-        teacher=get_teacher(request), subject=subject
+        teacher=get_teacher(request), subject=subject, chapter=chapter
     )
 
 
@@ -148,7 +149,6 @@ def list_bank_questions(
     chapter: str = Query(default=None),  # type: ignore[assignment]
     topic: str = Query(default=None),  # type: ignore[assignment]
     difficulty: str = Query(default=None),  # type: ignore[assignment]
-    q: str = Query(default=None),  # type: ignore[assignment]
     scope: str = Query(default="all"),
     limit: int = Query(default=30),
     offset: int = Query(default=0),
@@ -159,7 +159,6 @@ def list_bank_questions(
         chapter=chapter,
         topic=topic,
         difficulty=difficulty,
-        q=q,
         scope=scope,
         limit=limit,
         offset=offset,

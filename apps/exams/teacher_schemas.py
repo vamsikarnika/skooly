@@ -151,6 +151,7 @@ class BankFacetsOut(CamelSchema):
     subjects: list[str]
     chapters: list[BankChapterOut]
     topics: list[str]
+    difficulties: list[str]
 
 
 class BankQuestionIn(CamelSchema):

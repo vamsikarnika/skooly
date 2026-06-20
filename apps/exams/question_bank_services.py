@@ -21,6 +21,9 @@ from apps.exams.models import BankQuestion
 # A single page is capped so an unbounded catalog can't be dumped at once.
 MAX_LIMIT = 100
 
+# Difficulty is a fixed scale — present it in pedagogical order, not alphabetical.
+_DIFFICULTY_ORDER = ["easy", "medium", "hard"]
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -89,15 +92,15 @@ def list_questions(
     chapter: str | None = None,
     topic: str | None = None,
     difficulty: str | None = None,
-    q: str | None = None,
     scope: str = "all",
     limit: int = 30,
     offset: int = 0,
 ) -> dict:
     """Filtered, paginated view over the teacher's visible questions.
 
-    ``scope``: ``catalog`` (global only) | ``mine`` (own only) | ``all``.
-    Returns ``{"items": [...], "total": int}``.
+    All filters are exact matches on values the teacher picked from ``facets``
+    (no free-text search). ``scope``: ``catalog`` (global only) | ``mine`` (own
+    only) | ``all``. Returns ``{"items": [...], "total": int}``.
     """
     qs = _visible(teacher)
 
@@ -109,14 +112,11 @@ def list_questions(
     if subject:
         qs = qs.filter(subject__iexact=subject.strip())
     if chapter:
-        qs = qs.filter(chapter_name__icontains=chapter.strip())
+        qs = qs.filter(chapter_name__iexact=chapter.strip())
     if topic:
-        qs = qs.filter(topic__icontains=topic.strip())
+        qs = qs.filter(topic__iexact=topic.strip())
     if difficulty:
         qs = qs.filter(difficulty=difficulty.strip())
-    if q:
-        term = q.strip()
-        qs = qs.filter(Q(text__icontains=term) | Q(topic__icontains=term))
 
     total = qs.count()
     limit = max(1, min(int(limit), MAX_LIMIT))
@@ -125,19 +125,41 @@ def list_questions(
     return {"items": items, "total": total}
 
 
-def facets(*, teacher: Any, subject: str | None = None) -> dict:
-    """Distinct chapters + topics across the teacher's visible questions,
-    optionally narrowed to one subject. Powers the filter dropdowns."""
-    qs = _visible(teacher)
+def facets(
+    *, teacher: Any, subject: str | None = None, chapter: str | None = None
+) -> dict:
+    """Available filter values across the teacher's visible questions, cascading
+    with the filters already chosen so every option always has matches:
+
+    * ``subjects``     — always the full set the teacher can see.
+    * ``chapters``     — narrowed to ``subject`` when given.
+    * ``topics``       — narrowed to ``subject`` (+ ``chapter`` when given).
+    * ``difficulties`` — narrowed to the same scope as topics.
+
+    The frontend re-fetches this as filters change so the dropdowns only ever
+    offer values that return questions.
+
+    Note: ``.order_by(<field>)`` is reapplied before each ``.distinct()`` —
+    otherwise the model's default ordering leaks extra sort columns into the
+    SELECT and defeats the DISTINCT.
+    """
+    base = _visible(teacher)
+
+    # Subjects: the full universe (independent of the current subject pick).
+    subjects = sorted(
+        s for s in base.order_by("subject").values_list("subject", flat=True).distinct() if s
+    )
+
+    scoped = base
     if subject:
-        qs = qs.filter(subject__iexact=subject.strip())
+        scoped = scoped.filter(subject__iexact=subject.strip())
 
     chapters: list[dict] = []
     seen: set[str] = set()
     for cn, name in (
-        qs.exclude(chapter_name="")
-        .values_list("chapter_number", "chapter_name")
+        scoped.exclude(chapter_name="")
         .order_by("chapter_number", "chapter_name")
+        .values_list("chapter_number", "chapter_name")
         .distinct()
     ):
         if name in seen:
@@ -145,18 +167,29 @@ def facets(*, teacher: Any, subject: str | None = None) -> dict:
         seen.add(name)
         chapters.append({"number": cn, "name": name})
 
-    # .order_by(<field>) resets the model's default ordering — otherwise its
-    # extra sort columns leak into the SELECT and defeat .distinct().
+    topic_scope = scoped
+    if chapter:
+        topic_scope = topic_scope.filter(chapter_name__iexact=chapter.strip())
+
     topics = sorted(
         t
-        for t in qs.exclude(topic="").order_by("topic").values_list("topic", flat=True).distinct()
+        for t in topic_scope.exclude(topic="")
+        .order_by("topic")
+        .values_list("topic", flat=True)
+        .distinct()
     )
 
-    subjects = sorted(
-        s for s in qs.order_by("subject").values_list("subject", flat=True).distinct() if s
+    present = set(
+        topic_scope.exclude(difficulty="").values_list("difficulty", flat=True).distinct()
     )
+    difficulties = [d for d in _DIFFICULTY_ORDER if d in present]
 
-    return {"subjects": subjects, "chapters": chapters, "topics": topics}
+    return {
+        "subjects": subjects,
+        "chapters": chapters,
+        "topics": topics,
+        "difficulties": difficulties,
+    }
 
 
 # ---------------------------------------------------------------------------
