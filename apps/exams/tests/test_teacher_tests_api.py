@@ -522,6 +522,7 @@ _SHORT_PAYLOAD = {
     "topic": "Geography",
     "options": None,
     "correctAnswer": "New Delhi",
+    "explanation": "New Delhi is the capital of India.",
 }
 
 
@@ -718,6 +719,9 @@ def test_save_questions_roundtrip(client: Client, world_a) -> None:
     assert len(correct) == 1
     short = next(q for q in qs if q["questionType"] == "short_answer")
     assert short["correctAnswer"].lower() == "new delhi"
+    assert short["explanation"] == "New Delhi is the capital of India."
+    # MCQ payload omitted explanation → defaults to blank, not null.
+    assert mcq["explanation"] == ""
 
 
 @pytest.mark.django_db

@@ -307,6 +307,7 @@ def get_questions(
             "topic": q.topic,
             "options": options,
             "correct_answer": q.correct_answer,
+            "explanation": q.explanation,
         })
     return result
 
@@ -360,6 +361,7 @@ def save_questions(
                 difficulty=q.get("difficulty") or "",
                 topic=q.get("topic", "").strip(),
                 correct_answer=q.get("correct_answer", "").strip(),
+                explanation=q.get("explanation", "").strip(),
             )
             total_marks += question.marks
 
