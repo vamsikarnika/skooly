@@ -192,20 +192,34 @@ MSG91_AUTH_KEY = config("MSG91_AUTH_KEY", default="")
 # files default to plain storage here (dev-safe); prod swaps in WhiteNoise's
 # compressed + hashed storage (see prod.py).
 USE_R2 = config("USE_R2", default=False, cast=bool)
-_media_storage = (
-    {
-        "BACKEND": "storages.backends.s3.S3Storage",
-        "OPTIONS": {
-            "access_key": config("R2_ACCESS_KEY"),
-            "secret_key": config("R2_SECRET_KEY"),
-            "bucket_name": config("R2_BUCKET"),
-            "endpoint_url": config("R2_ENDPOINT"),
-            "signature_version": "s3v4",
-        },
+# Public host for serving R2 objects, e.g. "pub-xxxx.r2.dev" (bucket public dev
+# URL) or a custom domain like "media.smartskool.in". When set, file URLs are
+# permanent, unsigned, public ones (https://<host>/<key>) instead of short-lived
+# presigned S3 URLs — which both expire (~1h) and overflow URLField(200). The
+# bucket must have public access enabled in Cloudflare for these to resolve.
+R2_PUBLIC_HOST = config("R2_PUBLIC_HOST", default="").strip().rstrip("/")
+if USE_R2:
+    # NOTE: keep the R2_* lookups (which have no default) inside this branch so
+    # they're only required when R2 is actually enabled — dev/test run on local
+    # storage and must not need R2 credentials.
+    _r2_options = {
+        "access_key": config("R2_ACCESS_KEY"),
+        "secret_key": config("R2_SECRET_KEY"),
+        "bucket_name": config("R2_BUCKET"),
+        "endpoint_url": config("R2_ENDPOINT"),
+        "signature_version": "s3v4",
     }
-    if USE_R2
-    else {"BACKEND": "django.core.files.storage.FileSystemStorage"}
-)
+    if R2_PUBLIC_HOST:
+        _r2_options.update(
+            {
+                "custom_domain": R2_PUBLIC_HOST,
+                "querystring_auth": False,
+                "url_protocol": "https:",
+            }
+        )
+    _media_storage = {"BACKEND": "storages.backends.s3.S3Storage", "OPTIONS": _r2_options}
+else:
+    _media_storage = {"BACKEND": "django.core.files.storage.FileSystemStorage"}
 STORAGES = {
     "default": _media_storage,
     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
