@@ -14,6 +14,7 @@ from apps.attendance.models import Attendance, AttendanceStatus
 from apps.core.exceptions import Conflict, Forbidden, NotFound, ValidationFailed
 from apps.core.helpers import roll_to_int, today_local
 from apps.exams.models import (
+    ExamName,
     MCQOption,
     Question,
     ReportCard,
@@ -220,6 +221,7 @@ def create_test(
     available_from: datetime | None = None,
     available_until: datetime | None = None,
     duration_min: int = 0,
+    exam_name_id: int | None = None,
 ) -> dict:
     section = assigned_section(
         teacher=teacher, section_id=section_id, academic_year_id=academic_year_id
@@ -245,6 +247,11 @@ def create_test(
             raise ValidationFailed("available_until must be after available_from.")
 
     test_type_val = test_type if test_type in TestType.values else TestType.OTHER
+    # Link to the admin-defined exam name only when it belongs to this school;
+    # silently ignore a stale/foreign id rather than failing test creation.
+    exam_name = None
+    if exam_name_id is not None:
+        exam_name = ExamName.objects.filter(school=section.school, id=exam_name_id).first()
     test = Test.objects.create(
         school=section.school,
         section=section,
@@ -258,6 +265,7 @@ def create_test(
         available_until=available_until,
         duration_min=duration_min,
         created_by=teacher,
+        exam_name=exam_name,
     )
     now = timezone.now()
     section_label = f"{section.class_obj.name} — {section.name}"

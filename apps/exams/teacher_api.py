@@ -6,13 +6,14 @@ from django.http import HttpRequest
 from ninja import Query, Router
 
 from apps.accounts.teacher_auth import get_teacher, teacher_jwt_auth
-from apps.exams import question_bank_services, teacher_services
+from apps.exams import exam_name_services, question_bank_services, teacher_services
 from apps.exams.teacher_schemas import (
     BankFacetsOut,
     BankQuestionIn,
     BankQuestionListOut,
     BankQuestionOut,
     CreateTestIn,
+    ExamNameOut,
     MarksRosterItemOut,
     MessageOut,
     QuestionOut,
@@ -30,6 +31,15 @@ from apps.exams.teacher_schemas import (
 )
 
 router = Router(tags=["teacher-tests"], auth=teacher_jwt_auth, by_alias=True)
+
+
+@router.get("/exam-names", response=list[ExamNameOut])
+def list_exam_names(request: HttpRequest) -> list[ExamNameOut]:
+    """School-defined exam names the teacher can pick when creating a test."""
+    school = request.auth.school  # type: ignore[attr-defined]
+    if school is None:
+        return []
+    return [ExamNameOut.from_orm(e) for e in exam_name_services.list_exam_names(school)]
 
 
 @router.get("/tests", response=list[TestOut])
