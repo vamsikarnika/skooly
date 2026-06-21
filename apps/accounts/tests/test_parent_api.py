@@ -75,6 +75,9 @@ def test_send_otp_unknown_phone_404(client: Client, world_a) -> None:
 @pytest.mark.django_db
 def test_otp_login_returns_token_and_children(client: Client, world_a) -> None:
     _make_parent(world_a, PHONE_A)
+    school = world_a["school"]
+    school.logo_url = "https://cdn.example.com/uploads/1/school-logo/x.png"
+    school.save(update_fields=["logo_url"])
     code = parent_services.send_parent_otp(PHONE_A)
 
     res = client.post(
@@ -92,6 +95,7 @@ def test_otp_login_returns_token_and_children(client: Client, world_a) -> None:
     assert child["section"] == "A"
     assert child["rollNo"] == 14
     assert child["photoColor"].startswith("bg-")
+    assert child["schoolLogoUrl"] == "https://cdn.example.com/uploads/1/school-logo/x.png"
 
 
 @pytest.mark.django_db

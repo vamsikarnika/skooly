@@ -14,6 +14,7 @@ class ChildOut(CamelSchema):
     roll_no: int | None = None
     admission_no: str
     school: str
+    school_logo_url: str = ""
     photo_initials: str
     photo_color: str
 

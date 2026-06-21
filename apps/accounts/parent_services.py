@@ -284,6 +284,7 @@ def build_child_payload(student: Any, school: Any) -> dict[str, Any]:
         "roll_no": roll_no,
         "admission_no": student.admission_number,
         "school": school.name if school else "",
+        "school_logo_url": (school.logo_url if school else "") or "",
         "photo_initials": _initials(student.full_name),
         "photo_color": _avatar_color(student.id),
     }

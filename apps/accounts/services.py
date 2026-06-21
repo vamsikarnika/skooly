@@ -164,6 +164,7 @@ def teacher_login(*, phone: str, password: str) -> tuple[User, dict[str, Any]]:
         "email": email,
         "subject": subject,
         "school": school.name if school is not None else "",
+        "school_logo_url": (school.logo_url if school is not None else "") or "",
         "photo_url": photo_url,
     }
     token = issue_tokens_for_user(user)["access_token"]
@@ -198,6 +199,7 @@ def teacher_refresh(*, user: Any) -> dict[str, Any]:
         "email": email,
         "subject": subject,
         "school": school.name if school is not None else "",
+        "school_logo_url": (school.logo_url if school is not None else "") or "",
         "photo_url": photo_url,
     }
     token = issue_tokens_for_user(user)["access_token"]
@@ -242,6 +244,7 @@ def update_teacher_profile(*, user: Any, name: str, email: str) -> dict[str, Any
         "email": teacher.email,
         "subject": subject,
         "school": school.name if school else "",
+        "school_logo_url": (school.logo_url if school else "") or "",
         "photo_url": teacher.photo_url,
     }
 

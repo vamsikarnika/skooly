@@ -51,6 +51,9 @@ def _post(client: Client, phone: str, password: str):  # type: ignore[no-untyped
 @pytest.mark.django_db
 def test_login_success_returns_token_and_teacher(client, world_a) -> None:
     teacher, _subject = _setup_teacher(world_a)
+    school = world_a["school"]
+    school.logo_url = "https://cdn.example.com/uploads/1/school-logo/x.png"
+    school.save(update_fields=["logo_url"])
     res = _post(client, "+911111111102", "testpass123")
     assert res.status_code == 200, res.content
     body = res.json()
@@ -60,6 +63,7 @@ def test_login_success_returns_token_and_teacher(client, world_a) -> None:
     assert t["name"] == "Priya Sharma"
     assert t["subject"] == "Mathematics"
     assert t["school"] == "School A"
+    assert t["schoolLogoUrl"] == "https://cdn.example.com/uploads/1/school-logo/x.png"  # camelCase
     assert t["phone"] == "+91 11111 11102"
     assert t["email"] == "priya.sharma@skooly.in"
     assert t["photoUrl"] == "https://cdn.skooly.in/avatars/t1.jpg"  # camelCase

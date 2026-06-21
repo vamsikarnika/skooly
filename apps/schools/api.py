@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from django.http import HttpRequest
-from ninja import Router
+from ninja import File, Router
+from ninja.files import UploadedFile
 
 from apps.accounts.auth import jwt_auth
 from apps.accounts.models import Role
 from apps.core.exceptions import Forbidden, NotFound
+from apps.core.storage import save_uploaded_image
 from apps.schools import services
 from apps.schools.models import School
 from apps.schools.schemas import (
@@ -45,6 +47,28 @@ def update_current_school(request: HttpRequest, payload: SchoolUpdateRequest) ->
     _require_admin(request)
     school = _current_school(request)
     school = services.update_school(school, fields=payload.model_dump(by_alias=False, exclude_unset=True))
+    return SchoolDetailOut.from_orm(school)
+
+
+@router.post("/current/logo", response=SchoolDetailOut)
+def upload_current_school_logo(
+    request: HttpRequest,
+    file: UploadedFile = File(...),
+) -> SchoolDetailOut:
+    """Upload/replace the school logo. Validates + resizes the image, stores it,
+    and saves the resulting URL on the school. Mirrors the student/teacher photo
+    upload flow. To remove a logo, PATCH /current with logoUrl: ""."""
+    _require_admin(request)
+    school = _current_school(request)
+    url = save_uploaded_image(
+        file=file.file,
+        content_type=file.content_type or "application/octet-stream",
+        size=file.size,
+        school_id=school.id,
+        kind="school-logo",
+        owner_id=school.id,
+    )
+    school = services.update_school(school, fields={"logo_url": url})
     return SchoolDetailOut.from_orm(school)
 
 

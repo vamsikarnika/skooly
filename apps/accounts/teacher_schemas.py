@@ -23,6 +23,7 @@ class TeacherOut(CamelSchema):
     email: str
     subject: str
     school: str
+    school_logo_url: str = ""  # serialized as schoolLogoUrl
     photo_url: str = ""  # serialized as photoUrl
 
 
