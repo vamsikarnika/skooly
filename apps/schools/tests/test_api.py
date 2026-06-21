@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import io
+
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
+from PIL import Image
 
 from apps.accounts.models import Role
 from apps.accounts.tests.factories import UserFactory
@@ -95,6 +99,53 @@ def test_patch_school_updates_fields(client: Client, admin_a) -> None:
     body = res.json()
     assert body["name"] == "School A Renamed"
     assert body["primaryColor"] == "#ff0000"
+
+
+def _png_bytes(color: tuple[int, int, int] = (20, 100, 200)) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 64), color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@pytest.mark.django_db
+def test_upload_school_logo(client: Client, admin_a, settings, tmp_path) -> None:
+    settings.MEDIA_ROOT = str(tmp_path)
+    token = _login(client, admin_a)
+    upload = SimpleUploadedFile("logo.png", _png_bytes(), content_type="image/png")
+    res = client.post(
+        "/api/v1/schools/current/logo",
+        data={"file": upload},
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    assert res.status_code == 200, res.content
+    body = res.json()
+    assert body["logoUrl"]  # non-empty URL returned
+    assert "school-logo" in body["logoUrl"]
+
+
+@pytest.mark.django_db
+def test_upload_school_logo_admin_only(client: Client, teacher_a) -> None:
+    token = _login(client, teacher_a)
+    upload = SimpleUploadedFile("logo.png", _png_bytes(), content_type="image/png")
+    res = client.post(
+        "/api/v1/schools/current/logo",
+        data={"file": upload},
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    assert res.status_code == 403, res.content
+
+
+@pytest.mark.django_db
+def test_upload_school_logo_rejects_non_image(client: Client, admin_a, settings, tmp_path) -> None:
+    settings.MEDIA_ROOT = str(tmp_path)
+    token = _login(client, admin_a)
+    upload = SimpleUploadedFile("notes.txt", b"not an image", content_type="text/plain")
+    res = client.post(
+        "/api/v1/schools/current/logo",
+        data={"file": upload},
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    assert res.status_code == 422, res.content
 
 
 @pytest.mark.django_db
