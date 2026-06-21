@@ -8,6 +8,24 @@ from decimal import Decimal
 from apps.core.schemas import CamelSchema, Paginated
 
 
+class ExamNameOut(CamelSchema):
+    id: int
+    label: str
+    is_series: bool
+    display_order: int
+
+
+class ExamNameCreateRequest(CamelSchema):
+    label: str
+    is_series: bool = False
+
+
+class ExamNameUpdateRequest(CamelSchema):
+    label: str | None = None
+    is_series: bool | None = None
+    display_order: int | None = None
+
+
 class TestStats(CamelSchema):
     """Per-test summary. Absents are excluded from average/max/min."""
 

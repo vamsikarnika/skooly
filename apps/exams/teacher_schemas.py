@@ -43,6 +43,21 @@ class CreateTestIn(CamelSchema):
     available_from: datetime | None = None
     available_until: datetime | None = None
     duration_min: int = 0
+    # Set when the teacher picked an admin-defined exam name (see ExamNameOut);
+    # null for a custom free-text name. Stale/foreign ids are ignored server-side.
+    exam_name_id: int | None = None
+
+
+class ExamNameOut(CamelSchema):
+    """A school-defined exam name offered as a pick option when creating a test.
+
+    ``is_series`` true → a numbered base like "Weekly Test"; the app pre-fills
+    "Weekly Test " and the teacher types the number. False → used verbatim.
+    """
+
+    id: int
+    label: str
+    is_series: bool
 
 
 # ---------------------------------------------------------------------------

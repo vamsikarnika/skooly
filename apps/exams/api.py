@@ -15,10 +15,14 @@ from apps.accounts.models import Role
 from apps.core.exceptions import Forbidden, NotFound
 from apps.core.helpers import get_in_tenant
 from apps.core.pagination import paginate
-from apps.exams import admin_report_services, services, teacher_services
+from apps.core.schemas import ActionResponse
+from apps.exams import admin_report_services, exam_name_services, services, teacher_services
 from apps.exams.models import Test
 from apps.exams.schemas import (
     AdminReportCardOut,
+    ExamNameCreateRequest,
+    ExamNameOut,
+    ExamNameUpdateRequest,
     GenerateReportCardsIn,
     GenerateReportCardsOut,
     PublishReportCardsIn,
@@ -116,6 +120,49 @@ def student_scores(
     return services.student_scores_history(
         school=school, student=student, from_date=fd, to_date=td
     )
+
+
+# ---------------------------------------------------------------------------
+# Exam names — school-defined, reusable test names managed by the admin.
+# Teachers pick from these when creating offline tests (see teacher_api
+# /exam-names). Reads are open to any authed school user; writes are admin-only.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/exam-names", response=list[ExamNameOut])
+def list_exam_names(request: HttpRequest) -> list[ExamNameOut]:
+    school = _school(request)
+    return [ExamNameOut.from_orm(e) for e in exam_name_services.list_exam_names(school)]
+
+
+@router.post("/exam-names", response=ExamNameOut)
+def create_exam_name(request: HttpRequest, payload: ExamNameCreateRequest) -> ExamNameOut:
+    _require_admin(request)
+    school = _school(request)
+    exam_name = exam_name_services.create_exam_name(
+        school, label=payload.label, is_series=payload.is_series
+    )
+    return ExamNameOut.from_orm(exam_name)
+
+
+@router.patch("/exam-names/{exam_name_id}", response=ExamNameOut)
+def update_exam_name(
+    request: HttpRequest, exam_name_id: int, payload: ExamNameUpdateRequest
+) -> ExamNameOut:
+    _require_admin(request)
+    school = _school(request)
+    exam_name = exam_name_services.update_exam_name(
+        school, exam_name_id, **payload.model_dump(by_alias=False, exclude_unset=True)
+    )
+    return ExamNameOut.from_orm(exam_name)
+
+
+@router.delete("/exam-names/{exam_name_id}", response=ActionResponse)
+def delete_exam_name(request: HttpRequest, exam_name_id: int) -> ActionResponse:
+    _require_admin(request)
+    school = _school(request)
+    exam_name_services.delete_exam_name(school, exam_name_id)
+    return ActionResponse(success=True)
 
 
 # ---------------------------------------------------------------------------

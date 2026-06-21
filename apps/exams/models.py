@@ -14,6 +14,7 @@ after publish but can only *attempt* it once ``available_from`` is reached.
 from __future__ import annotations
 
 from django.db import models
+from django.db.models.functions import Lower
 
 from apps.core.models import TenantScopedModel
 
@@ -42,6 +43,47 @@ class Difficulty(models.TextChoices):
     EASY = "easy", "Easy"
     MEDIUM = "medium", "Medium"
     HARD = "hard", "Hard"
+
+
+class ExamName(TenantScopedModel):
+    """An admin-defined exam name, reusable across every section of a school.
+
+    Two kinds:
+    * Single (``is_series=False``) — a one-off name like "Quarterly Exam"; the
+      teacher picks it and the test name is used verbatim.
+    * Numbered series (``is_series=True``) — a base like "Weekly Test"; the
+      teacher picks it and types the number themselves ("Weekly Test 7"), so a
+      school adds "Weekly Test" once instead of enumerating every instance.
+
+    Defined by the admin in the portal; teachers select from the list when
+    creating an offline test (a custom free-text name is still allowed).
+    Persists across academic years. Removing one soft-deletes it (deleted_at),
+    so tests already linked via ``Test.exam_name`` keep their reference.
+    """
+
+    label = models.CharField(max_length=80)
+    is_series = models.BooleanField(default=False)
+    display_order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        db_table = "exam_names"
+        ordering = ["display_order", "id"]
+        constraints = [
+            # Case-insensitive unique label per school, among non-deleted rows.
+            models.UniqueConstraint(
+                Lower("label"),
+                "school",
+                condition=models.Q(deleted_at__isnull=True),
+                name="uniq_exam_name_label_per_school",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["school", "display_order"]),
+        ]
+
+    def __str__(self) -> str:
+        kind = "series" if self.is_series else "single"
+        return f"ExamName[{kind}] {self.label}"
 
 
 class Test(TenantScopedModel):
@@ -74,6 +116,17 @@ class Test(TenantScopedModel):
         null=True,
         blank=True,
         related_name="tests_created",
+    )
+    # Set when the teacher picked an admin-defined exam name; null for custom
+    # free-text names. The link (not the copied name string) is what future
+    # cross-section reporting groups on. SET_NULL is a backstop — removing an
+    # exam name soft-deletes it, so the row survives and the link holds.
+    exam_name = models.ForeignKey(
+        "exams.ExamName",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tests",
     )
     published_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
