@@ -23,6 +23,7 @@ from ninja import Router
 from apps.accounts.parent_auth import get_parent_child, parent_jwt_auth
 from apps.core.exceptions import APIError, Conflict, NotFound, ValidationFailed
 from apps.core.schemas import CamelSchema
+from apps.exams import radar_services
 from apps.exams.models import (
     MCQOption,
     Question,
@@ -35,6 +36,7 @@ from apps.exams.models import (
     TestScore,
     TestSubmission,
 )
+from apps.exams.schemas import StrengthProfileOut
 
 router = Router(tags=["parent-marks"], auth=parent_jwt_auth, by_alias=True)
 
@@ -133,6 +135,19 @@ def get_test(request: HttpRequest, child_id: int, test_id: int) -> dict:
     if test is None:
         raise NotFound("No such test for this child.")
     return _result(test, student)
+
+
+@router.get("/children/{child_id}/strengths", response=StrengthProfileOut)
+def child_strengths(request: HttpRequest, child_id: int) -> dict:
+    """The child's strength/weakness radar — per-subject percentile against the
+    whole grade, built from the common tests every section has published."""
+    student = get_parent_child(request, child_id)
+    school = request.auth.school  # type: ignore[attr-defined]
+    return radar_services.build_strength_profile(
+        school=school,
+        student=student,
+        academic_year_id=school.current_academic_year_id if school else None,
+    )
 
 
 # ---------------------------------------------------------------------------

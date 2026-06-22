@@ -5,8 +5,11 @@ from __future__ import annotations
 from django.http import HttpRequest
 from ninja import Query, Router
 
+from apps.academics.models import StudentEnrollment, TeacherAssignment
 from apps.accounts.teacher_auth import get_teacher, teacher_jwt_auth
-from apps.exams import exam_name_services, question_bank_services, teacher_services
+from apps.core.exceptions import NotFound
+from apps.exams import exam_name_services, question_bank_services, radar_services, teacher_services
+from apps.exams.schemas import StrengthProfileOut
 from apps.exams.teacher_schemas import (
     BankFacetsOut,
     BankQuestionIn,
@@ -29,6 +32,7 @@ from apps.exams.teacher_schemas import (
     TestOut,
     TestReportOut,
 )
+from apps.people.models import Student
 
 router = Router(tags=["teacher-tests"], auth=teacher_jwt_auth, by_alias=True)
 
@@ -40,6 +44,29 @@ def list_exam_names(request: HttpRequest) -> list[ExamNameOut]:
     if school is None:
         return []
     return [ExamNameOut.from_orm(e) for e in exam_name_services.list_exam_names(school)]
+
+
+@router.get("/students/{student_id}/strengths", response=StrengthProfileOut)
+def student_strengths(request: HttpRequest, student_id: int) -> dict:
+    """Per-subject percentile radar for one student. Visible only if the
+    student is in a section this teacher is assigned to (else 404, no leak)."""
+    school = request.auth.school  # type: ignore[attr-defined]
+    year_id = school.current_academic_year_id if school else None
+    enrollment = (
+        StudentEnrollment.objects.filter(student_id=student_id, status="active")
+        .select_related("section")
+        .first()
+    )
+    if enrollment is None or not TeacherAssignment.objects.filter(
+        teacher=get_teacher(request), section=enrollment.section, academic_year_id=year_id
+    ).exists():
+        raise NotFound("Student not found.")
+    student = Student.objects.filter(id=student_id).first()
+    if student is None:
+        raise NotFound("Student not found.")
+    return radar_services.build_strength_profile(
+        school=school, student=student, academic_year_id=year_id
+    )
 
 
 @router.get("/tests", response=list[TestOut])

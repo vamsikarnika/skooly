@@ -16,7 +16,13 @@ from apps.core.exceptions import Forbidden, NotFound
 from apps.core.helpers import get_in_tenant
 from apps.core.pagination import paginate
 from apps.core.schemas import ActionResponse
-from apps.exams import admin_report_services, exam_name_services, services, teacher_services
+from apps.exams import (
+    admin_report_services,
+    exam_name_services,
+    radar_services,
+    services,
+    teacher_services,
+)
 from apps.exams.models import Test
 from apps.exams.schemas import (
     AdminReportCardOut,
@@ -28,6 +34,7 @@ from apps.exams.schemas import (
     PublishReportCardsIn,
     PublishReportCardsOut,
     ReportTermOut,
+    StrengthProfileOut,
     StudentScoresHistoryOut,
     TestDetailOut,
     TestListOut,
@@ -119,6 +126,17 @@ def student_scores(
     td = to_date or date_type.today()
     return services.student_scores_history(
         school=school, student=student, from_date=fd, to_date=td
+    )
+
+
+@router.get("/students/{student_id}/strengths", response=StrengthProfileOut)
+def student_strengths(request: HttpRequest, student_id: int) -> dict:
+    """Per-subject percentile radar — relative grading across the grade's
+    common tests. Admin/internal read; any student in the school."""
+    school = _school(request)
+    student = get_in_tenant(Student, school, pk=student_id)
+    return radar_services.build_strength_profile(
+        school=school, student=student, academic_year_id=school.current_academic_year_id
     )
 
 
