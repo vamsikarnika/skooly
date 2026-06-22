@@ -115,6 +115,32 @@ class StudentScoresHistoryOut(CamelSchema):
     by_subject: list[SubjectScoresOut]
 
 
+# ----- Strength/weakness radar ----------------------------------------------
+
+
+class StrengthSubjectOut(CamelSchema):
+    """One axis of the radar: the student's standing in a subject."""
+
+    subject_id: int
+    subject: str
+    percentile: int    # 0-100, relative to the whole grade (all sections)
+    avg_percent: int   # student's mean raw % across the tests that fed this axis
+    test_count: int    # how many common tests contributed
+
+
+class StrengthProfileOut(CamelSchema):
+    class_name: str
+    section: str
+    academic_year: str
+    section_count: int          # sections in the grade
+    cohort_size: int            # students the percentiles are measured against
+    overall_percentile: int | None = None
+    subjects: list[StrengthSubjectOut]
+    # Subjects with a common test that isn't fully published yet (or where the
+    # student was absent throughout) — shown as "coming soon", not plotted.
+    pending_subjects: list[str]
+
+
 # ----- Admin report cards ----------------------------------------------------
 
 
