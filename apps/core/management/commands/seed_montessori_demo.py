@@ -576,16 +576,28 @@ class Command(BaseCommand):
         a shared exam name — the "common tests" the strength radar reads. Each
         student's marks are driven by a stable per-subject aptitude (hand-picked
         for the demo children, randomised for everyone else) so percentiles
-        spread into a meaningful radar. Idempotent: skips if already seeded."""
-        if ExamName.objects.filter(school=school).exists():
+        spread into a meaningful radar. Idempotent: a no-op once the common
+        tests exist, and coexists with any exam names the admin already made."""
+        # Key idempotency on the real signal — the common tests themselves — not
+        # on ExamName rows (the admin may have created some by hand via the UI).
+        if Test.objects.filter(
+            school=school, exam_name__isnull=False, published_at__isnull=False
+        ).exists():
             return 0, 0
 
-        exam_name_by_label = {
-            label: ExamName.objects.create(
-                school=school, label=label, is_series=is_series, display_order=i
-            )
-            for i, (label, is_series, _insts) in enumerate(COMMON_EXAMS, start=1)
-        }
+        # Reuse an existing exam name (case-insensitive) or create one, so we
+        # never collide with an admin-defined label.
+        by_lower = {e.label.lower(): e for e in ExamName.objects.filter(school=school)}
+        next_order = max((e.display_order for e in by_lower.values()), default=0)
+        exam_name_by_label: dict[str, ExamName] = {}
+        for label, is_series, _insts in COMMON_EXAMS:
+            existing = by_lower.get(label.lower())
+            if existing is None:
+                next_order += 1
+                existing = ExamName.objects.create(
+                    school=school, label=label, is_series=is_series, display_order=next_order
+                )
+            exam_name_by_label[label] = existing
         child_profiles = {
             c.id: CHILD_PROFILES[c.first_name]
             for c in children
