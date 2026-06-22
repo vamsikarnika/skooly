@@ -57,7 +57,15 @@ from apps.core.management.commands.seed_demo import (
     TEACHER_QUALS,
 )
 from apps.core.management.commands.seed_demo import Command as DemoCommand
-from apps.exams.models import ReportCard, ReportCardTerm
+from apps.exams.models import (
+    ExamName,
+    ReportCard,
+    ReportCardTerm,
+    Test,
+    TestMode,
+    TestScore,
+    TestType,
+)
 from apps.people.models import (
     Gender,
     Parent,
@@ -120,6 +128,33 @@ WEEKDAY_LOW = [
 ]
 WEEKDAYS = [DayOfWeek.MON, DayOfWeek.TUE, DayOfWeek.WED, DayOfWeek.THU, DayOfWeek.FRI]
 
+# "Common tests" the strength radar reads: exams every section of a grade
+# writes under the same name. Each entry is (exam label, is_series,
+# [(test name, max marks, date), ...]). The radar groups by (exam, name,
+# subject) and averages each student's percentile across all of them.
+COMMON_EXAMS: list[tuple[str, bool, list[tuple[str, int, date]]]] = [
+    ("Quarterly Exam", False, [("Quarterly Exam", 100, date(2025, 8, 28))]),
+    ("Half-Yearly Exam", False, [("Half-Yearly Exam", 100, date(2025, 11, 21))]),
+    ("Weekly Test", True, [
+        ("Weekly Test 1", 25, date(2026, 1, 16)),
+        ("Weekly Test 2", 25, date(2026, 2, 13)),
+    ]),
+]
+
+# Hand-picked subject aptitude (target %) for the demo parent's children, so
+# their radar tells a clear story (STEM-leaning Aarav, language-leaning Ananya).
+# Every other student gets a randomised but self-consistent shape.
+CHILD_PROFILES: dict[str, dict[str, int]] = {
+    "Aarav": {
+        "Mathematics": 92, "Science": 88, "Social Studies": 71,
+        "English": 63, "Hindi": 57, "Telugu": 74,
+    },
+    "Ananya": {
+        "Mathematics": 61, "Science": 73, "Social Studies": 83,
+        "English": 93, "Hindi": 86, "Telugu": 90,
+    },
+}
+
 
 class Command(BaseCommand):
     help = "Seed a large Montessori demo school (no teacher timetable clashes)."
@@ -135,9 +170,18 @@ class Command(BaseCommand):
             "--logo", default="",
             help="Optional logo image URL to set on the school (else set it later in the admin portal).",
         )
+        parser.add_argument(
+            "--exams-only", action="store_true",
+            help="Backfill exam-named common tests onto the existing demo (feeds the "
+                 "strength radar) without recreating the school. Idempotent.",
+        )
 
     def handle(self, *args: Any, **opts: Any) -> None:
         rng = random.Random(opts["seed"])
+
+        if opts["exams_only"]:
+            self._backfill_common_exams(rng)
+            return
 
         existing = User.objects.filter(phone=SCHOOL_PHONE).first()
         if existing and not opts["reset"]:
@@ -223,6 +267,14 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS(
                     f"  ✓ parent login: {PARENT_PHONE} / {PARENT_PASSWORD} → "
                     f"{', '.join(c.full_name for c in children)}"
+                ))
+
+                ce_tests, ce_scores = self._seed_common_exams(
+                    rng, school, year, sections, subjects, children
+                )
+                self.stdout.write(self.style.SUCCESS(
+                    f"  ✓ common exams: {ce_tests} published across all sections "
+                    f"({ce_scores:,} scores) — feeds the strength radar"
                 ))
 
                 rc_count = self._seed_report_cards(school, children, year)
@@ -477,6 +529,139 @@ class Command(BaseCommand):
                 roll_number=f"{i + 1:02d}", enrollment_date=date(admission_year, 6, 15),
                 status="active",
             )
+
+    # --- common exams (strength radar) ----------------------------------------
+
+    def _backfill_common_exams(self, rng: random.Random) -> None:
+        """Add exam-named common tests to an already-seeded demo school, without
+        recreating it — used to light up the strength radar on an existing
+        (e.g. prod) demo. No-op if the exams are already present."""
+        existing = User.objects.filter(phone=SCHOOL_PHONE).first()
+        school = existing.school if existing else None
+        if school is None:
+            self.stdout.write(self.style.ERROR(
+                "No Montessori demo school found — run the full seed first."
+            ))
+            return
+        with transaction.atomic(), use_school(school):
+            year = school.current_academic_year
+            sections = list(
+                Section.objects.filter(school=school, class_obj__academic_year=year)
+                .select_related("class_obj")
+            )
+            subjects = list(Subject.objects.filter(school=school))
+            children = list(
+                Student.objects.filter(parent_links__parent__phone=PARENT_PHONE).distinct()
+            )
+            tests, scores = self._seed_common_exams(rng, school, year, sections, subjects, children)
+            if tests == 0:
+                self.stdout.write(self.style.WARNING(
+                    "Common exams already present — nothing to backfill."
+                ))
+            else:
+                self.stdout.write(self.style.SUCCESS(
+                    f"  ✓ common exams backfilled: {tests} tests, {scores:,} scores"
+                ))
+
+    def _seed_common_exams(
+        self,
+        rng: random.Random,
+        school: School,
+        year: Any,
+        sections: list[Section],
+        subjects: list[Subject],
+        children: list[Student],
+    ) -> tuple[int, int]:
+        """Publish, in every section of every grade, the same set of exams under
+        a shared exam name — the "common tests" the strength radar reads. Each
+        student's marks are driven by a stable per-subject aptitude (hand-picked
+        for the demo children, randomised for everyone else) so percentiles
+        spread into a meaningful radar. Idempotent: skips if already seeded."""
+        if ExamName.objects.filter(school=school).exists():
+            return 0, 0
+
+        exam_name_by_label = {
+            label: ExamName.objects.create(
+                school=school, label=label, is_series=is_series, display_order=i
+            )
+            for i, (label, is_series, _insts) in enumerate(COMMON_EXAMS, start=1)
+        }
+        child_profiles = {
+            c.id: CHILD_PROFILES[c.first_name]
+            for c in children
+            if c.first_name in CHILD_PROFILES
+        }
+        target_cache: dict[tuple[int, int], int] = {}
+        tests_made = scores_made = 0
+
+        for section in sections:
+            enrolls = list(
+                StudentEnrollment.objects.filter(section=section, status="active")
+                .select_related("student")
+            )
+            teacher_by_subject = {
+                a.subject_id: a.teacher
+                for a in TeacherAssignment.objects.filter(section=section)
+            }
+            for subj in subjects:
+                teacher = teacher_by_subject.get(subj.id)
+                for label, _is_series, instances in COMMON_EXAMS:
+                    for tname, max_marks, tdate in instances:
+                        test = Test.objects.create(
+                            school=school, section=section, subject=subj,
+                            name=tname, test_type=TestType.OTHER, mode=TestMode.OFFLINE,
+                            test_date=tdate, max_marks=max_marks, duration_min=0,
+                            created_by=teacher, exam_name=exam_name_by_label[label],
+                            published_at=timezone.now(),
+                        )
+                        tests_made += 1
+                        batch: list[TestScore] = []
+                        for enr in enrolls:
+                            student = enr.student
+                            if rng.random() < 0.03:  # the odd absentee
+                                batch.append(TestScore(
+                                    school=school, test=test, student=student,
+                                    marks_obtained=None, is_absent=True,
+                                ))
+                                continue
+                            target = self._subject_target(
+                                rng, target_cache, student, subj, child_profiles
+                            )
+                            pct = min(99, max(12, target + rng.randint(-7, 7)))
+                            batch.append(TestScore(
+                                school=school, test=test, student=student,
+                                marks_obtained=round(max_marks * pct / 100),
+                                is_absent=False,
+                            ))
+                        TestScore.objects.bulk_create(batch, batch_size=2000)
+                        scores_made += len(batch)
+        return tests_made, scores_made
+
+    @staticmethod
+    def _subject_target(
+        rng: random.Random,
+        cache: dict[tuple[int, int], int],
+        student: Student,
+        subject: Subject,
+        child_profiles: dict[int, dict[str, int]],
+    ) -> int:
+        """A student's stable target % in a subject. Demo children follow their
+        hand-picked profile; everyone else gets a latent ability (cached under
+        key 0) plus a fixed per-subject offset, so their standing is consistent
+        across the term's exams while still varying by subject."""
+        key = (student.id, subject.id)
+        if key in cache:
+            return cache[key]
+        profile = child_profiles.get(student.id)
+        if profile and subject.name in profile:
+            value = profile[subject.name]
+        else:
+            ability_key = (student.id, 0)
+            if ability_key not in cache:
+                cache[ability_key] = rng.randint(45, 90)
+            value = min(96, max(20, cache[ability_key] + rng.randint(-12, 12)))
+        cache[key] = value
+        return value
 
     # --- demo parent / report cards / announcements ---------------------------
 
